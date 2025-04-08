@@ -5,6 +5,15 @@ build/
 dist/
 wheels/
 *.egg-info
+.ipynb_checkpoints
+
+# environment variables
+.env
 
 # Virtual environments
 .venv
+lightning_logs/
+test_checkpoints/
+
+# MLflow
+mlflow_service/

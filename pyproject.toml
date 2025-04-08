@@ -6,9 +6,14 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "ipython>=9.0.2",
+    "mlflow>=2.21.3",
     "pandas>=2.2.3",
     "plotly>=6.0.1",
+    "python-dotenv>=1.1.0",
+    "pytorch-lightning[extra]>=2.5.1",
     "scikit-learn>=1.6.1",
+    "torch>=2.6.0",
+    "transformers==4.35.2",
 ]
 
 [dependency-groups]
