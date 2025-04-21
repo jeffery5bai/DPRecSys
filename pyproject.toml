@@ -13,6 +13,7 @@ dependencies = [
     "pytorch-lightning[extra]>=2.5.1",
     "scikit-learn>=1.6.1",
     "torch>=2.6.0",
+    "torch-geometric>=2.6.1",
     "transformers==4.35.2",
 ]
 
