@@ -106,13 +106,12 @@ class MMGCN(GeneralRecommender):
 
 
 class GCN_ID(torch.nn.Module):
-    def __init__(self, edge_index, num_user, num_item, dim_id, aggr_mode='add', concate=True, device='cpu'):
+    def __init__(self, edge_index, num_user, num_item, dim_id, aggr_mode='add', concate=True):
         super(GCN_ID, self).__init__()
-        self.edge_index = edge_index.to(device)
+        self.edge_index = edge_index
         self.num_user = num_user
         self.num_item = num_item
         self.dim_id = dim_id
-        self.device = device
         self.concate = concate
 
         self.id_embedding = nn.init.xavier_normal_(torch.rand((num_user + num_item, dim_id), requires_grad=True))
