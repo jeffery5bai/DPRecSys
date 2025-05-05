@@ -108,13 +108,18 @@ class MMGCN(GeneralRecommender):
 class GCN_ID(torch.nn.Module):
     def __init__(self, edge_index, num_user, num_item, dim_id, aggr_mode='add', concate=True):
         super(GCN_ID, self).__init__()
+        # NOTE: This makes edge_index move together with the model across devices automatically!
+        self.register_buffer('edge_index', edge_index)
         self.edge_index = edge_index
+
         self.num_user = num_user
         self.num_item = num_item
         self.dim_id = dim_id
         self.concate = concate
 
-        self.id_embedding = nn.init.xavier_normal_(torch.rand((num_user + num_item, dim_id), requires_grad=True))
+        self.id_embedding = nn.Parameter(
+            nn.init.xavier_normal_(torch.empty(num_user + num_item, dim_id))
+        )
 
         self.conv1 = BaseModel(dim_id, dim_id, aggr=aggr_mode)
         self.linear1 = nn.Linear(dim_id, dim_id)
