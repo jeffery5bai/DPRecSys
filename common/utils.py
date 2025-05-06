@@ -2,18 +2,13 @@ import os
 import random
 import sys
 from collections import Counter
-from typing import Dict, Set, Tuple
+from typing import Set, Tuple
 
 import numpy as np
 import pandas as pd
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from pytorch_lightning import LightningModule, Trainer, seed_everything
-from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
-from torch.utils.data import DataLoader, Dataset
+from pytorch_lightning import seed_everything
 from torch_geometric.data import Data
-from torch_geometric.nn import GCNConv
 
 sys.path.append(os.path.abspath(os.path.join(os.getcwd(), "..")))
 
@@ -29,12 +24,13 @@ MIN_USER_NUM, MIN_ITEM_NUM = 0, 0
 USER_ID_FIELD = "userID"
 ITEM_ID_FIELD = "movieID"
 YEAR_FIELD = "date_year"
-RATING_FIELD = "rating"
 TIMESTAMP_FIELD = "timestamp"
+RATING_FIELD = "rating"
+LABEL_FIELD = "label"
 
 # TODO: change this to assign other dir for user/item id mappling
-USER_MAPPING_DIR = "userid_mapping.csv"
-ITEM_MAPPING_DIR = "itemid_mapping.csv"
+USER_MAPPING_DIR = "../datasets/userid_mapping.csv"
+ITEM_MAPPING_DIR = "../datasets/itemid_mapping.csv"
 
 
 """
@@ -46,7 +42,7 @@ Toolkits:
         - `_filter_by_threshold`: Filter out user/item with interactions less than min threshold.
     - `stratified_time_split`: Split the dataset into train, validation, and test sets based on user interactions over time.
     - `create_interaction_graph`: Create a user-item interaction graph from the DataFrame.
-- `UserItemPairDataset`: Dataset class for user-item pairs.
+    - `prepare_prediction_df`: Prepare the prediction DataFrame for the test set.
 """
 
 
@@ -83,6 +79,7 @@ class DataPreprocessor:
         self,
         file_dir: str = MOVIELENS_DATA_DIR,
         year_range: Tuple[int] = YEAR_RANGE,
+        rating_threshold: float = RATING_THRESHOLD,
         u_mapping_file: str = USER_MAPPING_DIR,
         i_mapping_file: str = ITEM_MAPPING_DIR,
         user_col: str = USER_ID_FIELD,
@@ -158,7 +155,7 @@ class DataPreprocessor:
         print("done!")
         print("---" * 10)
         # NOTE: get the timestamp / label the target based on the rating threshold
-        df["timestamp"] = pd.to_datetime(
+        df[TIMESTAMP_FIELD] = pd.to_datetime(
             {
                 "year": df["date_year"],
                 "month": df["date_month"],
@@ -168,11 +165,11 @@ class DataPreprocessor:
                 "second": df["date_second"],
             }
         )
-        df["label"] = (df[rating_col] >= RATING_THRESHOLD).astype(int)
+        df[LABEL_FIELD] = (df[rating_col] >= rating_threshold).astype(int)
         # NOTE: Final Data Info
         print("==== Final Data Info: ====")
         print("Data Year Range:", year_range)
-        print("Rating Threshold:", RATING_THRESHOLD)
+        print("Rating Threshold:", rating_threshold)
         print("Num of interactions:", len(df))
         print("Num of distinct users:", df[user_col].nunique())
         print("Num of distinct items:", df[item_col].nunique())
@@ -310,9 +307,9 @@ class DataPreprocessor:
         print(f"test: {len(df_test)} ({round(len(df_test) / total_cnt * 100, 2)}%)")
         print("---" * 10, "\n")
         print("Check target label distribution after splitting (%):")
-        print("train", df_train["label"].value_counts(normalize=True))
-        print("valid", df_val["label"].value_counts(normalize=True))
-        print("test", df_test["label"].value_counts(normalize=True))
+        print("train", df_train[LABEL_FIELD].value_counts(normalize=True))
+        print("valid", df_val[LABEL_FIELD].value_counts(normalize=True))
+        print("test", df_test[LABEL_FIELD].value_counts(normalize=True))
 
         return df_train, df_val, df_test
 
@@ -333,12 +330,12 @@ class DataPreprocessor:
 
         print("Building edges...")
         edge_index = torch.tensor(
-            np.array([df_split["userID"].values, df_split["movieID"].values]), dtype=torch.long
+            np.array([df_split[USER_ID_FIELD].values, df_split[ITEM_ID_FIELD].values]), dtype=torch.long
         )
         print("Building bi-directed edges (duplications)...")
         edge_index = torch.cat((edge_index, edge_index[[1, 0]]), dim=1)  # [2, num_edges*2]
         print("Building labels...")
-        edge_label = torch.tensor(df_split["label"].values, dtype=torch.float)
+        edge_label = torch.tensor(df_split[LABEL_FIELD].values, dtype=torch.float)
         print("Building bi-directed labels (duplications)...", "\n")
         edge_label = torch.cat((edge_label, edge_label))
         data = Data(edge_index=edge_index, edge_label=edge_label)
@@ -347,20 +344,52 @@ class DataPreprocessor:
 
         return data
 
-
-class UserItemPairDataset(Dataset):
-    def __init__(self, df: pd.DataFrame):
+    def prepare_prediction_df(self, df: pd.DataFrame, K: int = 500, seed=RANDOM_SEED) -> pd.DataFrame:
         """
-        User-Item Pair Dataset for training and evaluation.
+        Prepare the prediction DataFrame for the test set.
+        Performs negative sampling for users who have less than K interactions.
         Args:
-            df (pd.DataFrame): with columns ['user_id', 'item_id', 'label']
+            df (pd.DataFrame): The DataFrame containing user-item interactions.
+            K (int): The number of items to sample for each user.
+        Returns:
+            pd.DataFrame: A DataFrame containing user-item pairs with ratings.
         """
-        self.user_ids = torch.tensor(df['userID'].values, dtype=torch.long)
-        self.item_ids = torch.tensor(df['movieID'].values, dtype=torch.long)
-        self.labels = torch.tensor(df['label'].values, dtype=torch.float)
+        np.random.seed(seed)
+        df = df.loc[:, [USER_ID_FIELD, ITEM_ID_FIELD, LABEL_FIELD]].copy()
+        n_users = df[USER_ID_FIELD].nunique()
+        n_items = df[ITEM_ID_FIELD].nunique()
+        all_items = df[ITEM_ID_FIELD].unique()
 
-    def __len__(self):
-        return len(self.labels)
+        result_dfs = []
+        for user_id, user_df in df.groupby(USER_ID_FIELD):
+            user_items = user_df[ITEM_ID_FIELD].unique()
 
-    def __getitem__(self, idx) -> Tuple[torch.tensor]:
-        return self.user_ids[idx], self.item_ids[idx], self.labels[idx]
+            num_existing = len(user_df)
+            if num_existing >= K:
+                sampled_df = user_df.sample(n=K, random_state=seed)
+            else:
+                num_to_sample = K - num_existing
+                unseen_items = np.setdiff1d(all_items, user_items)
+
+                # NOTE: Sample unseen items
+                sampled_items = np.random.choice(unseen_items, size=num_to_sample, replace=False)
+
+                # NOTE: Create negative samples with dummy values
+                negative_df = pd.DataFrame(
+                    {
+                        USER_ID_FIELD: user_id,
+                        ITEM_ID_FIELD: sampled_items,
+                        LABEL_FIELD: 0,
+                    }
+                )
+
+                sampled_df = pd.concat([user_df, negative_df], ignore_index=True)
+
+            result_dfs.append(sampled_df)
+
+        prediction_df = pd.concat(result_dfs, ignore_index=True)
+        print("Prediction DataFrame:")
+        print(f"User Pool: {n_users}")
+        print(f"Item Pool: {n_items}, negative sampled to {K} items for each user")
+        print(f"Num of interactions: {n_users}(users) * {K}(items) = {len(prediction_df)}")
+        return prediction_df
