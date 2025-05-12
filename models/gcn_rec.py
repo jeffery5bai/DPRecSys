@@ -59,7 +59,7 @@ class GCNRecID(LightningModule):
         return loss, acc, prec, rec, f1
 
     def training_step(self, batch, batch_idx):
-        user, item, label = batch
+        user, item, label = batch["user"], batch["item"], batch["label"]
         emb = self.forward()
         scores = self._compute_scores(emb, user, item)
         loss, acc, prec, rec, f1 = self._evaluate(scores, label)

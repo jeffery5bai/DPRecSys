@@ -2,7 +2,7 @@ import os
 import random
 import sys
 from collections import Counter
-from typing import Dict, Set, Tuple
+from typing import Dict, List, Set, Tuple
 
 import numpy as np
 import pandas as pd
@@ -32,6 +32,7 @@ YEAR_FIELD = "date_year"
 TIMESTAMP_FIELD = "timestamp"
 RATING_FIELD = "rating"
 LABEL_FIELD = "label"
+FEATURE_IDX_FIELD = ["actorID_idx", "country_idx", "directorID_idx", "genre_idx"]
 
 # TODO: change this to assign other dir for user/item id mappling
 USER_MAPPING_DIR = "../datasets/userid_mapping.csv"
@@ -264,161 +265,6 @@ class DataPreprocessor:
                 print(f"{len(dropped_inter)} dropped interactions")
             df.drop(df.index[dropped_inter], inplace=True)
 
-    # NOTE: Train/Val/Test Split
-    def stratified_time_split(
-        self,
-        df: pd.DataFrame,
-        user_col: str = USER_ID_FIELD,
-        time_col: str = TIMESTAMP_FIELD,
-        train_ratio: float = 0.7,
-        val_ratio: float = 0.1,
-        test_ratio: float = 0.2,
-    ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-        """
-        Split the dataset into train, validation, and test sets based on user interactions over time.
-        Individual-level time-based split.
-        Args:
-            df (pd.DataFrame): The input DataFrame containing user-item interactions.
-            user_col (str): The column name for user IDs.
-            time_col (str): The column name for timestamps.
-            train_ratio (float): The ratio of the training set.
-            val_ratio (float): The ratio of the validation set.
-            test_ratio (float): The ratio of the test set.
-        Returns:
-            Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]: A tuple containing the training, validation, and test DataFrames.
-        """
-        # Assert: ratios must sum to 1
-        assert abs(train_ratio + val_ratio + test_ratio - 1.0) < 1e-6
-
-        train_list, val_list, test_list = [], [], []
-
-        for user_id, user_df in df.groupby(user_col):
-            user_df = user_df.sort_values(by=time_col).reset_index(drop=True)
-
-            n = len(user_df)
-            n_train = int(n * train_ratio)
-            n_val = int(n * val_ratio)
-
-            train = user_df.iloc[:n_train]
-            val = user_df.iloc[n_train : n_train + n_val]
-            test = user_df.iloc[n_train + n_val :]
-
-            train_list.append(train)
-            val_list.append(val)
-            test_list.append(test)
-
-        df_train = pd.concat(train_list).reset_index(drop=True)
-        df_val = pd.concat(val_list).reset_index(drop=True)
-        df_test = pd.concat(test_list).reset_index(drop=True)
-
-        total_cnt = len(df)
-        print(
-            f"Splitting data into train/valid/test by time period with ratio=({train_ratio} : {val_ratio} : {test_ratio}):"
-        )
-        print(f"train: {len(df_train)} ({round(len(df_train) / total_cnt * 100, 2)}%")
-        print(f"valid: {len(df_val)} ({round(len(df_val) / total_cnt * 100, 2)}%)")
-        print(f"test: {len(df_test)} ({round(len(df_test) / total_cnt * 100, 2)}%)")
-        print("---" * 10, "\n")
-        print("Check target label distribution after splitting (%):")
-        print("train", df_train[LABEL_FIELD].value_counts(normalize=True))
-        print("valid", df_val[LABEL_FIELD].value_counts(normalize=True))
-        print("test", df_test[LABEL_FIELD].value_counts(normalize=True))
-
-        return df_train, df_val, df_test
-
-    # NOTE: User-Item Bi-partite Graph Construction
-    def create_interaction_graph(self, df_split: pd.DataFrame) -> Data:
-        """
-        Create a user-item interaction graph from the DataFrame.
-        Args:
-            df_split (pd.DataFrame): The input DataFrame containing user-item interactions.
-        Returns:
-            Data: A PyTorch Geometric Data object representing the user-item interaction graph.
-        """
-        print("Creating interaction graph...")
-        print("Drop negative samples")
-        print("  Num of all interactions:", len(df_split))
-        df_split = df_split.loc[df_split["label"] == 1, :]
-        print("  Num of positive interactions:", len(df_split), "\n")
-
-        print("Building edges...")
-        edge_index = torch.tensor(
-            np.array([df_split[USER_ID_FIELD].values, df_split[ITEM_ID_FIELD].values]), dtype=torch.long
-        )
-        print("Building bi-directed edges (duplications)...")
-        edge_index = torch.cat((edge_index, edge_index[[1, 0]]), dim=1)  # [2, num_edges*2]
-        print("Building labels...")
-        edge_label = torch.tensor(df_split[LABEL_FIELD].values, dtype=torch.float)
-        print("Building bi-directed labels (duplications)...", "\n")
-        edge_label = torch.cat((edge_label, edge_label))
-        data = Data(edge_index=edge_index, edge_label=edge_label)
-        print("Interaction Graph:", data)
-        print("Edge Index:", data.edge_index)
-
-        return data
-
-    def prepare_prediction_df(self, df: pd.DataFrame, K: int = 500, seed=RANDOM_SEED) -> pd.DataFrame:
-        """
-        Prepare the prediction DataFrame for the test set.
-        Performs negative sampling for users who have less than K interactions.
-        Args:
-            df (pd.DataFrame): The DataFrame containing user-item interactions.
-            K (int): The number of items to sample for each user.
-        Returns:
-            pd.DataFrame: A DataFrame containing user-item pairs with ratings.
-        """
-        np.random.seed(seed)
-        df = df.loc[:, [USER_ID_FIELD, ITEM_ID_FIELD, LABEL_FIELD]].copy()
-        n_users = df[USER_ID_FIELD].nunique()
-        n_items = df[ITEM_ID_FIELD].nunique()
-        all_items = df[ITEM_ID_FIELD].unique()
-
-        result_dfs = []
-        for user_id, user_df in df.groupby(USER_ID_FIELD):
-            user_items = user_df[ITEM_ID_FIELD].unique()
-
-            num_existing = len(user_df)
-            if num_existing >= K:
-                sampled_df = user_df.sample(n=K, random_state=seed)
-            else:
-                num_to_sample = K - num_existing
-                unseen_items = np.setdiff1d(all_items, user_items)
-
-                # NOTE: Sample unseen items
-                sampled_items = np.random.choice(unseen_items, size=num_to_sample, replace=False)
-
-                # NOTE: Create negative samples with dummy values
-                negative_df = pd.DataFrame(
-                    {
-                        USER_ID_FIELD: user_id,
-                        ITEM_ID_FIELD: sampled_items,
-                        LABEL_FIELD: 0,
-                    }
-                )
-
-                sampled_df = pd.concat([user_df, negative_df], ignore_index=True)
-
-            result_dfs.append(sampled_df)
-
-        prediction_df = pd.concat(result_dfs, ignore_index=True)
-        print("Prediction DataFrame:")
-        print(f"User Pool: {n_users}")
-        print(f"Item Pool: {n_items}, negative sampled to {K} items for each user")
-        print(f"Num of interactions: {n_users}(users) * {K}(items) = {len(prediction_df)}")
-        return prediction_df
-
-
-class FeatureEngineer:
-    """
-    Feature Engineer for MovieLens dataset.
-    """
-
-    def __init__(self):
-        self.actor_vocab = None
-        self.country_vocab = None
-        self.director_vocab = None
-        self.genre_vocab = None
-
     def join_item_features(
         self,
         df: pd.DataFrame,
@@ -426,8 +272,8 @@ class FeatureEngineer:
         country_file_dir: str = COUNTRY_DATA_DIR,
         director_file_dir: str = DIRECTOR_DATA_DIR,
         genre_file_dir: str = GENRE_DATA_DIR,
-        K: int = 5,
-        drop_original: bool = True,
+        actor_k: int = 5,
+        pad_token: str = "[PAD]",
     ) -> pd.DataFrame:
         """
         Join item features (actor, country, director, genre) to the DataFrame.
@@ -437,58 +283,56 @@ class FeatureEngineer:
             country_file_dir (str): The path to the country data file.
             director_file_dir (str): The path to the director data file.
             genre_file_dir (str): The path to the genre data file.
-            K (int): The number of top actors to extract.
-            drop_original (bool): Whether to drop the original columns after encoding.
+            actor_k (int): The number of top actors to extract.
+            pad_token (str): The padding token to use for categorical features.
         Returns:
             pd.DataFrame: The DataFrame with joined item features.
         """
         # NOTE: Extract features
-        actor_df = self._extract_top_k_actors(file_dir=actor_file_dir, K=K)
+        print("extracting item features...")
+        actor_df = self._extract_top_k_actors(file_dir=actor_file_dir, K=actor_k, pad_token=pad_token)
         country_df = self._extract_country(file_dir=country_file_dir)
         director_df = self._extract_director(file_dir=director_file_dir)
-        genre_df = self._extract_genres(file_dir=genre_file_dir)
-
-        # NOTE: Encode categorical features
-        actor_df, self.actor_vocab = self.encode_category_feature(
-            df=actor_df, col="actorID", is_list=True, drop_original=drop_original
-        )
-        country_df, self.country_vocab = self.encode_category_feature(
-            df=country_df, col="country", is_list=False, drop_original=drop_original
-        )
-        director_df, self.director_vocab = self.encode_category_feature(
-            df=director_df, col="directorID", is_list=False, drop_original=drop_original
-        )
-        genre_df, self.genre_vocab = self.encode_category_feature(
-            df=genre_df, col="genre", is_list=True, drop_original=drop_original
-        )
+        genre_df = self._extract_genres(file_dir=genre_file_dir, pad_token=pad_token)
 
         # NOTE: Merge features (inner join)
+        print("merging features...")
+        print("interaction data count before merging:", len(df))
         df = df.merge(actor_df, on="movieID")
         df = df.merge(country_df, on="movieID")
         df = df.merge(director_df, on="movieID")
         df = df.merge(genre_df, on="movieID")
+        print("interaction data count after merging:", len(df))
+        print("done!")
 
         return df
 
-    def _extract_top_k_actors(self, file_dir: str = ACTOR_DATA_DIR, K: int = 5) -> pd.DataFrame:
+    def _extract_top_k_actors(
+        self, file_dir: str = ACTOR_DATA_DIR, K: int = 5, pad_token: str = "[PAD]"
+    ) -> pd.DataFrame:
         """
-        Extract the top K actors for each movie from the actor data file.
+        Extract the top K actors for each movie from the actor data file. (1-to-N mapping)
         Args:
             file_dir (str): The path to the actor data file.
             K (int): The number of top actors to extract.
+            pad_token (str): The padding token to use for actors.
         Returns:
             pd.DataFrame: A DataFrame containing the top K actors for each movie.
         """
         actor_df = pd.read_table(file_dir, encoding="latin-1")
         return (
             actor_df.groupby("movieID")
-            .apply(lambda df: df.sort_values("ranking").head(K)["actorID"].tolist())
+            .apply(
+                lambda df: (
+                    df.sort_values("ranking").head(K)["actorID"].tolist() + [pad_token] * max(0, K - len(df))
+                )[:K]
+            )  # ensure no longer than K
             .reset_index(name="actorID")
         )
 
     def _extract_country(self, file_dir: str = COUNTRY_DATA_DIR) -> pd.DataFrame:
         """
-        Extract the country information from the country data file.
+        Extract the country information from the country data file. (1-to-1 mapping)
         Args:
             file_dir (str): The path to the country data file.
         Returns:
@@ -499,7 +343,7 @@ class FeatureEngineer:
 
     def _extract_director(self, file_dir: str = DIRECTOR_DATA_DIR) -> pd.DataFrame:
         """
-        Extract the director information from the director data file.
+        Extract the director information from the director data file. (1-to-1 mapping)
         Args:
             file_dir (str): The path to the director data file.
         Returns:
@@ -508,23 +352,135 @@ class FeatureEngineer:
         director_df = pd.read_table(file_dir, encoding="latin-1")
         return director_df
 
-    def _extract_genres(self, file_dir: str = GENRE_DATA_DIR) -> pd.DataFrame:
+    def _extract_genres(
+        self, file_dir: str = GENRE_DATA_DIR, K: int = 8, pad_token: str = "[PAD]"
+    ) -> pd.DataFrame:
         """
-        Extract the genre information from the genre data file.
+        Extract the genre information from the genre data file. (1-to-N mapping)
         Args:
             file_dir (str): The path to the genre data file.
+            K (int): The max number of genres (by EDA).
+            pad_token (str): The padding token to use for genres.
         Returns:
             pd.DataFrame: A DataFrame containing the genre information for each movie.
         """
         genre_df = pd.read_table(file_dir)
 
-        return genre_df.groupby("movieID").apply(lambda df: df["genre"].tolist()).reset_index(name="genre")
+        return (
+            genre_df.groupby("movieID")
+            .apply(
+                lambda df: (df.head(K)["genre"].tolist() + [pad_token] * max(0, K - len(df)))[
+                    :K
+                ]  # ensure no longer than K
+            )
+            .reset_index(name="genre")
+        )
 
-    def encode_category_feature(
-        self, df: pd.DataFrame, col: str, is_list: bool, drop_original: bool = False
-    ) -> Tuple[pd.DataFrame, Dict[str, int]]:
+
+class FeatureEngineer:
+    """
+    Feature Engineer for MovieLens dataset.
+    """
+
+    def __init__(self):
+        self.vocab2idx = {}
+        self.pad_token = "[PAD]"
+        self.oov_token = "[OOV]"
+
+    def fit_transform(
+        self,
+        df: pd.DataFrame,
+        cols: List[str] = ["actorID", "country", "directorID", "genre"],
+        is_lists: List[bool] = [True, False, False, True],
+        drop_original: bool = True,
+    ) -> pd.DataFrame:
         """
-        Encode categorical features using one-hot encoding.
+        Fit and transform categorical features to create a mapping from vocab to index.
+        Args:
+            df (pd.DataFrame): The input DataFrame containing user-item interactions.
+            cols (List[str]): The column names for the categorical features to fit and transform.
+            is_list (List[bool]): Whether the columns contain lists of categorical features.
+            drop_original (bool): Whether to drop the original columns after encoding.
+        Returns:
+            pd.DataFrame: The DataFrame with the encoded categorical features.
+        """
+        self.fit(df, cols, is_lists)
+        return self.transform(df, cols, is_lists, drop_original)
+
+    def fit(
+        self,
+        df: pd.DataFrame,
+        cols: List[str] = ["actorID", "country", "directorID", "genre"],
+        is_lists: List[bool] = [True, False, False, True],
+    ):
+        """
+        Fit categorical features.
+        Args:
+            df (pd.DataFrame): The input DataFrame containing user-item interactions.
+            cols (List[str]): The column names for the categorical features to fit.
+            is_lists (bool): Whether the columns contain lists of categorical features.
+        Returns:
+            Dict[str, Dict[str, int]]: A dictionary containing the vocab2idx mapping for each column.
+        """
+        for col, is_list in zip(cols, is_lists):
+            self.vocab2idx[col] = self._fit_category_feature(df, col, is_list)
+            print("Fitted: vocab2idx for", col)
+
+    def _fit_category_feature(
+        self,
+        df: pd.DataFrame,
+        col: str,
+        is_list: bool,
+    ):
+        """
+        Fit categorical features to create a mapping from vocab to index.
+        Args:
+            df (pd.DataFrame): The input DataFrame containing user-item interactions.
+            col (str): The column name for the categorical feature to fit.
+            is_list (bool): Whether the column contains lists of categorical features.
+        Returns:
+            Dict[str, int]: A dictionary containing the vocab2idx mapping for the column.
+        """
+        if is_list:
+            # NOTE: Flatten all actor/genre lists and build unique vocabulary
+            vocabs = set(str(cat_feat) for cat_list in df[col] for cat_feat in cat_list)
+            vocabs -= set([self.pad_token])  # remove padding token
+        else:
+            vocabs = set(df[col].astype(str))
+
+        # NOTE: Create a mapping from vocab to index
+        vocab2idx = {vocab: idx + 1 for idx, vocab in enumerate(sorted(vocabs))}
+        vocab2idx[self.pad_token] = 0  # for paddings in train/test set
+        vocab2idx[self.oov_token] = len(vocab2idx) + 1  # for unknowns features in test set
+        return vocab2idx
+
+    def transform(
+        self,
+        df: pd.DataFrame,
+        cols: List[str] = ["actorID", "country", "directorID", "genre"],
+        is_lists: List[bool] = [True, False, False, True],
+        drop_original: bool = True,
+    ) -> pd.DataFrame:
+        """
+        Encode categorical features.
+        Args:
+            df (pd.DataFrame): The input DataFrame containing user-item interactions.
+            cols (List[str]): The column names for the categorical features to encode.
+            is_list (List[bool]): Whether the columns contain lists of categorical features.
+            drop_original (bool): Whether to drop the original columns after encoding.
+        Returns:
+            pd.DataFrame: The DataFrame with the encoded categorical features.
+        """
+        for col, is_list in zip(cols, is_lists):
+            df = self._encode_category_feature(df, col, is_list, drop_original)
+            print("Encoded: idx for", col)
+        return df
+
+    def _encode_category_feature(
+        self, df: pd.DataFrame, col: str, is_list: bool, drop_original: bool = True
+    ) -> pd.DataFrame:
+        """
+        Encode categorical features using fitted vocab2idx.
         Args:
             df (pd.DataFrame): The input DataFrame containing user-item interactions.
             col (str): The column name for the categorical feature to encode.
@@ -533,32 +489,29 @@ class FeatureEngineer:
         Returns:
             pd.DataFrame: The DataFrame with the encoded categorical feature.
         """
-
-        if is_list:
-            # NOTE: Flatten all actor lists and build unique vocabulary
-            vocabs = set(str(cat_feat) for cat_list in df[col] for cat_feat in cat_list)
-        else:
-            vocabs = set(df[col].astype(str))
-
-        # NOTE: Create a mapping from vocab to index
-        vocab2idx = {vocab: idx + 1 for idx, vocab in enumerate(sorted(vocabs))}
-        vocab2idx["[OOV]"] = 0  # for unknowns features in test set
+        # NOTE: Check if the column already fitted
+        if col not in self.vocab2idx:
+            raise ValueError(f"Column {col} not fitted. Please fit the column first.")
+        vocab2idx = self.vocab2idx[col]
 
         # NOTE: Encode the categorical feature
         if is_list:
             df[f"{col}_idx"] = df[col].apply(
                 lambda x: [
-                    vocab2idx[cat_feat] if cat_feat in vocab2idx else vocab2idx["[OOV]"] for cat_feat in x
+                    vocab2idx[cat_feat] if cat_feat in vocab2idx else vocab2idx[self.oov_token]
+                    for cat_feat in x
                 ]
             )
         else:
-            df[f"{col}_idx"] = df[col].apply(lambda x: vocab2idx[x] if x in vocab2idx else vocab2idx["[OOV]"])
+            df[f"{col}_idx"] = df[col].apply(
+                lambda x: vocab2idx[x] if x in vocab2idx else vocab2idx[self.oov_token]
+            )
 
         # NOTE: Drop the original column if specified
         if drop_original:
-            df = df.loc[:, ["movieID", f"{col}_idx"]].copy()
+            df = df.drop(columns=[col])
 
-        return df, vocab2idx
+        return df
 
 
 class ExperimentDataPreprocessor:
