@@ -23,7 +23,7 @@ class UserItemPairDataset(Dataset):
         """
         User-Item Pair Dataset for training and evaluation.
         Args:
-            df (pd.DataFrame): with columns ['userID', 'movieID', 'label']
+            df (pd.DataFrame): with columns ['userID', 'movieID', 'label'] (optional: encoded features)
         """
         self.user_ids = torch.tensor(df[USER_ID_FIELD].values, dtype=torch.long)
         self.item_ids = torch.tensor(df[ITEM_ID_FIELD].values, dtype=torch.long)
@@ -63,4 +63,3 @@ class UserItemPairDataset(Dataset):
             "director": self.director_ids[idx],
             "genre": self.genre_ids[idx],
         }
-        # return self.user_ids[idx], self.item_ids[idx], self.labels[idx]

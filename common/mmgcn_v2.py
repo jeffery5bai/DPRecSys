@@ -104,10 +104,59 @@ class MMGCN(GeneralRecommender):
         score_matrix = torch.matmul(temp_user_tensor, item_tensor.t())
         return score_matrix
 
+class GCN_MODULE(torch.nn.Module):
+    def __init__(self, graph_data, num_user, num_item, dim_id, aggr_mode='add', concate=True):
+        super(GCN_MODULE, self).__init__()
+        # NOTE: This makes edge_index move together with the model across devices automatically!
+        self.register_buffer('graph_data', graph_data)
+        self.edge_index = graph_data.edge_index
 
-class GCN_ID(torch.nn.Module):
+        self.num_user = num_user
+        self.num_item = num_item
+        self.dim_id = dim_id
+        self.concate = concate
+
+        # ID embedding for all users and items
+        self.id_embedding = nn.Parameter(
+            nn.init.xavier_normal_(torch.empty(num_user + num_item, dim_id))
+        )
+
+        # Actor embedding
+        self.actor_embedding = nn.Embedding(graph_data.num_actor_ids, dim_id, padding_idx=0)
+
+        self.conv1 = BaseModel(dim_id, dim_id, aggr=aggr_mode)
+        self.linear1 = nn.Linear(dim_id, dim_id)
+        self.g_layer1 = nn.Linear(2 * dim_id if concate else dim_id, dim_id)
+
+        self.conv2 = BaseModel(dim_id, dim_id, aggr=aggr_mode)
+        self.linear2 = nn.Linear(dim_id, dim_id)
+        self.g_layer2 = nn.Linear(2 * dim_id if concate else dim_id, dim_id)
+
+        self.conv3 = BaseModel(dim_id, dim_id, aggr=aggr_mode)
+        self.linear3 = nn.Linear(dim_id, dim_id)
+        self.g_layer3 = nn.Linear(2 * dim_id if concate else dim_id, dim_id)
+
+    def forward(self):
+        x = F.normalize(self.id_embedding)
+
+        h = F.leaky_relu(self.conv1(x, self.edge_index))
+        x_hat = F.leaky_relu(self.linear1(x))
+        x = F.leaky_relu(self.g_layer1(torch.cat([h, x_hat], dim=1)) if self.concate else self.g_layer1(h + x_hat))
+
+        h = F.leaky_relu(self.conv2(x, self.edge_index))
+        x_hat = F.leaky_relu(self.linear2(x))
+        x = F.leaky_relu(self.g_layer2(torch.cat([h, x_hat], dim=1)) if self.concate else self.g_layer2(h + x_hat))
+    
+        h = F.leaky_relu(self.conv3(x, self.edge_index))
+        x_hat = F.leaky_relu(self.linear3(x))
+        x = F.leaky_relu(self.g_layer3(torch.cat([h, x_hat], dim=1)) if self.concate else self.g_layer3(h + x_hat))
+
+        return x
+
+
+class GCN_ID_MODULE(torch.nn.Module):
     def __init__(self, edge_index, num_user, num_item, dim_id, aggr_mode='add', concate=True):
-        super(GCN_ID, self).__init__()
+        super(GCN_ID_MODULE, self).__init__()
         # NOTE: This makes edge_index move together with the model across devices automatically!
         self.register_buffer('edge_index', edge_index)
         self.edge_index = edge_index

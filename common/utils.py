@@ -148,26 +148,6 @@ class DataPreprocessor:
         print("Data count after:", len(df))
         print("done!")
         print("---" * 10)
-        # NOTE: Re-index
-        uni_users = sorted(pd.unique(df[user_col]))
-        uni_items = sorted(pd.unique(df[item_col]))
-        # start from 0
-        u_id_map = {k: i for i, k in enumerate(uni_users)}
-        i_id_map = {k: i for i, k in enumerate(uni_items)}
-        df[user_col] = df[user_col].map(u_id_map)
-        df[item_col] = df[item_col].map(i_id_map)
-        df[user_col] = df[user_col].astype(int)
-        df[item_col] = df[item_col].astype(int)
-        # dump
-        u_df = pd.DataFrame(list(u_id_map.items()), columns=["from", "to"])
-        i_df = pd.DataFrame(list(i_id_map.items()), columns=["from", "to"])
-        u_df.to_csv(os.path.join(u_mapping_file), index=False)
-        i_df.to_csv(os.path.join(i_mapping_file), index=False)
-        print(f"Re-index mapping dumped into ...")
-        print(f"user: {u_mapping_file}")
-        print(f"item: {i_mapping_file}")
-        print("done!")
-        print("---" * 10)
         # NOTE: get the timestamp / label the target based on the rating threshold
         df[TIMESTAMP_FIELD] = pd.to_datetime(
             {
@@ -375,6 +355,47 @@ class DataPreprocessor:
             )
             .reset_index(name="genre")
         )
+
+    def re_index(
+        self,
+        df: pd.DataFrame,
+        user_col: str = USER_ID_FIELD,
+        item_col: str = ITEM_ID_FIELD,
+        user_mapping_file: str = USER_MAPPING_DIR,
+        item_mapping_file: str = ITEM_MAPPING_DIR,
+    ) -> pd.DataFrame:
+        """
+        Re-index the user and item mapping after joining and filtering.
+        Args:
+            df (pd.DataFrame): The input DataFrame containing user-item interactions.
+            user_col (str): The column name for user IDs.
+            item_col (str): The column name for item IDs.
+            user_mapping_file (str): The path to the user mapping file.
+            item_mapping_file (str): The path to the item mapping file.
+        Returns:
+            pd.DataFrame: The DataFrame with re-indexed user and item mapping.
+        """
+        # NOTE: Re-index
+        uni_users = sorted(pd.unique(df[user_col]))
+        uni_items = sorted(pd.unique(df[item_col]))
+        # start from 0
+        u_id_map = {k: i for i, k in enumerate(uni_users)}
+        i_id_map = {k: i for i, k in enumerate(uni_items)}
+        df[user_col] = df[user_col].map(u_id_map)
+        df[item_col] = df[item_col].map(i_id_map)
+        df[user_col] = df[user_col].astype(int)
+        df[item_col] = df[item_col].astype(int)
+        # dump
+        u_df = pd.DataFrame(list(u_id_map.items()), columns=["from", "to"])
+        i_df = pd.DataFrame(list(i_id_map.items()), columns=["from", "to"])
+        u_df.to_csv(os.path.join(user_mapping_file), index=False)
+        i_df.to_csv(os.path.join(item_mapping_file), index=False)
+        print(f"Re-index mapping dumped into ...")
+        print(f"user: {user_mapping_file}")
+        print(f"item: {item_mapping_file}")
+        print("done!")
+        print("---" * 10)
+        return df
 
 
 class FeatureEngineer:
@@ -622,13 +643,18 @@ class ExperimentDataPreprocessor:
         Returns:
             pd.DataFrame: A DataFrame containing user-item pairs with ratings.
         """
-        np.random.seed(seed)
+        # NOTE: Reserve item features and join after sampling
+        item_feature_df = (
+            df[[ITEM_ID_FIELD, *FEATURE_IDX_FIELD]].drop_duplicates([ITEM_ID_FIELD], ignore_index=True).copy()
+        )
+
         df = df.loc[:, [USER_ID_FIELD, ITEM_ID_FIELD, LABEL_FIELD]].copy()
         n_users = df[USER_ID_FIELD].nunique()
         n_items = df[ITEM_ID_FIELD].nunique()
         all_items = df[ITEM_ID_FIELD].unique()
 
         result_dfs = []
+        np.random.seed(seed)
         for user_id, user_df in df.groupby(USER_ID_FIELD):
             user_items = user_df[ITEM_ID_FIELD].unique()
 
@@ -656,6 +682,7 @@ class ExperimentDataPreprocessor:
             result_dfs.append(sampled_df)
 
         prediction_df = pd.concat(result_dfs, ignore_index=True)
+        prediction_df = prediction_df.merge(item_feature_df, on=ITEM_ID_FIELD, how="inner")
         print("Prediction DataFrame:")
         print(f"User Pool: {n_users}")
         print(f"Item Pool: {n_items}, negative sampled to {K} items for each user")
