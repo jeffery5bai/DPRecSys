@@ -32,7 +32,9 @@ YEAR_FIELD = "date_year"
 TIMESTAMP_FIELD = "timestamp"
 RATING_FIELD = "rating"
 LABEL_FIELD = "label"
+FEATURE_FIELD = ["actorID", "country", "directorID", "genre"]
 FEATURE_IDX_FIELD = ["actorID_idx", "country_idx", "directorID_idx", "genre_idx"]
+IS_LIST_FEATURES = [True, False, False, True]
 
 # TODO: change this to assign other dir for user/item id mappling
 USER_MAPPING_DIR = "../datasets/userid_mapping.csv"
@@ -356,48 +358,6 @@ class DataPreprocessor:
             .reset_index(name="genre")
         )
 
-    def re_index(
-        self,
-        df: pd.DataFrame,
-        user_col: str = USER_ID_FIELD,
-        item_col: str = ITEM_ID_FIELD,
-        user_mapping_file: str = USER_MAPPING_DIR,
-        item_mapping_file: str = ITEM_MAPPING_DIR,
-    ) -> pd.DataFrame:
-        """
-        Re-index the user and item mapping after joining and filtering.
-        Args:
-            df (pd.DataFrame): The input DataFrame containing user-item interactions.
-            user_col (str): The column name for user IDs.
-            item_col (str): The column name for item IDs.
-            user_mapping_file (str): The path to the user mapping file.
-            item_mapping_file (str): The path to the item mapping file.
-        Returns:
-            pd.DataFrame: The DataFrame with re-indexed user and item mapping.
-        """
-        # NOTE: Re-index
-        uni_users = sorted(pd.unique(df[user_col]))
-        uni_items = sorted(pd.unique(df[item_col]))
-        # start from 0
-        u_id_map = {k: i for i, k in enumerate(uni_users)}
-        i_id_map = {k: i for i, k in enumerate(uni_items)}
-        df[user_col] = df[user_col].map(u_id_map)
-        df[item_col] = df[item_col].map(i_id_map)
-        df[user_col] = df[user_col].astype(int)
-        df[item_col] = df[item_col].astype(int)
-        # dump
-        u_df = pd.DataFrame(list(u_id_map.items()), columns=["from", "to"])
-        i_df = pd.DataFrame(list(i_id_map.items()), columns=["from", "to"])
-        u_df.to_csv(os.path.join(user_mapping_file), index=False)
-        i_df.to_csv(os.path.join(item_mapping_file), index=False)
-        print(f"Re-index mapping dumped into ...")
-        print(f"user: {user_mapping_file}")
-        print(f"item: {item_mapping_file}")
-        print("done!")
-        print("---" * 10)
-        return df
-
-
 class FeatureEngineer:
     """
     Feature Engineer for MovieLens dataset.
@@ -411,41 +371,113 @@ class FeatureEngineer:
     def fit_transform(
         self,
         df: pd.DataFrame,
-        cols: List[str] = ["actorID", "country", "directorID", "genre"],
-        is_lists: List[bool] = [True, False, False, True],
+        user_col: str = USER_ID_FIELD,
+        item_col: str = ITEM_ID_FIELD,
+        feature_cols: List[str] = FEATURE_FIELD,
+        is_list_features: List[bool] = IS_LIST_FEATURES,
         drop_original: bool = True,
+        user_mapping_file: str = USER_MAPPING_DIR,
+        item_mapping_file: str = ITEM_MAPPING_DIR,
     ) -> pd.DataFrame:
         """
         Fit and transform categorical features to create a mapping from vocab to index.
         Args:
             df (pd.DataFrame): The input DataFrame containing user-item interactions.
-            cols (List[str]): The column names for the categorical features to fit and transform.
-            is_list (List[bool]): Whether the columns contain lists of categorical features.
+            user_col (str): The column name for user IDs.
+            item_col (str): The column name for item IDs.
+            feature_cols (List[str]): The column names for the categorical features to fit and transform.
+            is_list_features (List[bool]): Whether the columns contain lists of categorical features.
             drop_original (bool): Whether to drop the original columns after encoding.
         Returns:
             pd.DataFrame: The DataFrame with the encoded categorical features.
         """
-        self.fit(df, cols, is_lists)
-        return self.transform(df, cols, is_lists, drop_original)
+        self.fit(
+            df,
+            user_col,
+            item_col,
+            feature_cols,
+            is_list_features,
+            user_mapping_file,
+            item_mapping_file,
+        )
+        return self.transform(
+            df,
+            user_col,
+            item_col,
+            feature_cols,
+            is_list_features,
+            drop_original,
+        )
 
     def fit(
         self,
         df: pd.DataFrame,
-        cols: List[str] = ["actorID", "country", "directorID", "genre"],
-        is_lists: List[bool] = [True, False, False, True],
+        user_col: str = USER_ID_FIELD,
+        item_col: str = ITEM_ID_FIELD,
+        feature_cols: List[str] = FEATURE_FIELD,
+        is_list_features: List[bool] = IS_LIST_FEATURES,
+        user_mapping_file: str = USER_MAPPING_DIR,
+        item_mapping_file: str = ITEM_MAPPING_DIR,
     ):
         """
         Fit categorical features.
         Args:
             df (pd.DataFrame): The input DataFrame containing user-item interactions.
-            cols (List[str]): The column names for the categorical features to fit.
-            is_lists (bool): Whether the columns contain lists of categorical features.
+            user_col (str): The column name for user IDs.
+            item_col (str): The column name for item IDs.
+            feature_cols (List[str]): The column names for the categorical features to fit.
+            is_list_features (bool): Whether the columns contain lists of categorical features.
         Returns:
             Dict[str, Dict[str, int]]: A dictionary containing the vocab2idx mapping for each column.
         """
-        for col, is_list in zip(cols, is_lists):
+        # NOTE: fit user_id and item_id
+        self.vocab2idx[user_col], self.vocab2idx[item_col] = self._fit_re_index(
+            df, user_col, item_col, user_mapping_file, item_mapping_file
+        )
+        print("Fitted: user/item mapping")
+
+        # NOTE: fit categorical features
+        for col, is_list in zip(feature_cols, is_list_features):
             self.vocab2idx[col] = self._fit_category_feature(df, col, is_list)
             print("Fitted: vocab2idx for", col)
+
+    def _fit_re_index(
+        self,
+        df: pd.DataFrame,
+        user_col: str = USER_ID_FIELD,
+        item_col: str = ITEM_ID_FIELD,
+        user_mapping_file: str = USER_MAPPING_DIR,
+        item_mapping_file: str = ITEM_MAPPING_DIR,
+    ) -> Tuple[Dict[str, int], Dict[str, int]]:
+        """
+        Re-index the user and item mapping after joining and filtering.
+        Args:
+            df (pd.DataFrame): The input DataFrame containing user-item interactions.
+            user_col (str): The column name for user IDs.
+            item_col (str): The column name for item IDs.
+        Returns:
+            Tuple[Dict[str, int], Dict[str, int]]: A tuple containing the user and item mapping dictionaries.
+        """
+        # NOTE: Re-index
+        uni_users = sorted(df[user_col].unique().tolist())
+        uni_items = sorted(df[item_col].unique().tolist())
+        # start from 0
+        user_vocab2idx = {k: i for i, k in enumerate(uni_users)}
+        item_vocab2idx = {k: i for i, k in enumerate(uni_items)}
+        # add oov token
+        user_vocab2idx[self.oov_token] = len(user_vocab2idx)
+        item_vocab2idx[self.oov_token] = len(item_vocab2idx)
+
+        # dump to files
+        u_df = pd.DataFrame(list(user_vocab2idx.items()), columns=["from", "to"])
+        i_df = pd.DataFrame(list(item_vocab2idx.items()), columns=["from", "to"])
+        u_df.to_csv(os.path.join(user_mapping_file), index=False)
+        i_df.to_csv(os.path.join(item_mapping_file), index=False)
+        print(f"Re-index mapping dumped into ...")
+        print(f"user: {user_mapping_file}")
+        print(f"item: {item_mapping_file}")
+        
+        return user_vocab2idx, item_vocab2idx
 
     def _fit_category_feature(
         self,
@@ -478,23 +510,58 @@ class FeatureEngineer:
     def transform(
         self,
         df: pd.DataFrame,
-        cols: List[str] = ["actorID", "country", "directorID", "genre"],
-        is_lists: List[bool] = [True, False, False, True],
+        user_col: str = USER_ID_FIELD,
+        item_col: str = ITEM_ID_FIELD,
+        feature_cols: List[str] = FEATURE_FIELD,
+        is_list_features: List[bool] = IS_LIST_FEATURES,
         drop_original: bool = True,
     ) -> pd.DataFrame:
         """
         Encode categorical features.
         Args:
             df (pd.DataFrame): The input DataFrame containing user-item interactions.
-            cols (List[str]): The column names for the categorical features to encode.
-            is_list (List[bool]): Whether the columns contain lists of categorical features.
+            user_col (str): The column name for user IDs.
+            item_col (str): The column name for item IDs.
+            feature_cols (List[str]): The column names for the categorical features to encode.
+            is_list_features (List[bool]): Whether the columns contain lists of categorical features.
             drop_original (bool): Whether to drop the original columns after encoding.
         Returns:
             pd.DataFrame: The DataFrame with the encoded categorical features.
         """
-        for col, is_list in zip(cols, is_lists):
+        df = self._transfrom_re_index(df, user_col, item_col)
+        print("Transformed: Re-index user/item mapping")
+
+        for col, is_list in zip(feature_cols, is_list_features):
             df = self._encode_category_feature(df, col, is_list, drop_original)
-            print("Encoded: idx for", col)
+            print("Transformed: Encoded idx for", col)
+        return df
+
+    def _transfrom_re_index(
+        self,
+        df: pd.DataFrame,
+        user_col: str = USER_ID_FIELD,
+        item_col: str = ITEM_ID_FIELD,
+    ) -> pd.DataFrame:
+        """
+        Re-index the user and item mapping after joining and filtering.
+        Args:
+            df (pd.DataFrame): The input DataFrame containing user-item interactions.
+            user_col (str): The column name for user IDs.
+            item_col (str): The column name for item IDs.
+        Returns:
+            pd.DataFrame: The DataFrame with re-indexed user and item mapping.
+        """
+
+        if user_col not in self.vocab2idx or item_col not in self.vocab2idx:
+            raise ValueError(f"Column {user_col} or {item_col} not fitted. Please fit the column first.")
+
+        user_vocab2idx: dict = self.vocab2idx[user_col]
+        item_vocab2idx: dict = self.vocab2idx[item_col]
+
+        df[user_col] = df[user_col].apply(lambda x: user_vocab2idx.get(x, user_vocab2idx[self.oov_token]))
+        df[item_col] = df[item_col].apply(lambda x: item_vocab2idx.get(x, item_vocab2idx[self.oov_token]))
+        df[user_col] = df[user_col].astype(int)
+        df[item_col] = df[item_col].astype(int)
         return df
 
     def _encode_category_feature(
@@ -640,6 +707,7 @@ class ExperimentDataPreprocessor:
         Args:
             df (pd.DataFrame): The DataFrame containing user-item interactions.
             K (int): The number of items to sample for each user.
+            seed (int): The random seed for reproducibility.
         Returns:
             pd.DataFrame: A DataFrame containing user-item pairs with ratings.
         """

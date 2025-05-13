@@ -30,7 +30,9 @@ class UserItemPairDataset(Dataset):
         self.labels = torch.tensor(df[LABEL_FIELD].values, dtype=torch.float)
 
         self.actor_ids = (
-            torch.tensor(df[ENCODED_ACTOR_FIELD].apply(lambda x: np.array(x)).tolist(), dtype=torch.long)
+            torch.tensor(
+                np.array(df[ENCODED_ACTOR_FIELD].apply(lambda x: np.array(x)).tolist()), dtype=torch.long
+            )
             if ENCODED_ACTOR_FIELD in df.columns
             else None
         )
@@ -45,7 +47,9 @@ class UserItemPairDataset(Dataset):
             else None
         )
         self.genre_ids = (
-            torch.tensor(df[ENCODED_GENRE_FIELD].apply(lambda x: np.array(x)).values, dtype=torch.long)
+            torch.tensor(
+                np.array(df[ENCODED_GENRE_FIELD].apply(lambda x: np.array(x)).tolist()), dtype=torch.long
+            )
             if ENCODED_GENRE_FIELD in df.columns
             else None
         )

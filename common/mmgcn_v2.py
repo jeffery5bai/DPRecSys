@@ -104,6 +104,7 @@ class MMGCN(GeneralRecommender):
         score_matrix = torch.matmul(temp_user_tensor, item_tensor.t())
         return score_matrix
 
+# NOTE: (in development)
 class GCN_MODULE(torch.nn.Module):
     def __init__(self, graph_data, num_user, num_item, dim_id, aggr_mode='add', concate=True):
         super(GCN_MODULE, self).__init__()
@@ -116,13 +117,11 @@ class GCN_MODULE(torch.nn.Module):
         self.dim_id = dim_id
         self.concate = concate
 
-        # ID embedding for all users and items
+        # NOTE: ID embedding for all users and items
+        # dim: batch_size * (num_user + num_item + 2([OOV])) * dim_id
         self.id_embedding = nn.Parameter(
-            nn.init.xavier_normal_(torch.empty(num_user + num_item, dim_id))
+            nn.init.xavier_normal_(torch.empty(num_user + num_item + 2, dim_id))
         )
-
-        # Actor embedding
-        self.actor_embedding = nn.Embedding(graph_data.num_actor_ids, dim_id, padding_idx=0)
 
         self.conv1 = BaseModel(dim_id, dim_id, aggr=aggr_mode)
         self.linear1 = nn.Linear(dim_id, dim_id)
@@ -166,8 +165,10 @@ class GCN_ID_MODULE(torch.nn.Module):
         self.dim_id = dim_id
         self.concate = concate
 
+        # NOTE: ID embedding for all users and items
+        # dim: batch_size * (num_user + num_item + 2([OOV])) * dim_id
         self.id_embedding = nn.Parameter(
-            nn.init.xavier_normal_(torch.empty(num_user + num_item, dim_id))
+            nn.init.xavier_normal_(torch.empty(num_user + num_item + 2, dim_id))
         )
 
         self.conv1 = BaseModel(dim_id, dim_id, aggr=aggr_mode)

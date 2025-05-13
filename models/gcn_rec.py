@@ -12,7 +12,7 @@ from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_sc
 
 class GCNRec(LightningModule):
     """
-    Wrap up `GCN_MODULE` model into Lightning Module as base recommendation model.
+    Wrap up `GCN_ID_MODULE` model and side information into Lightning Module as base recommendation model.
     """
 
     def __init__(self, edge_index, num_user, num_item, dim_id=64, lr=1e-3):
@@ -72,7 +72,7 @@ class GCNRec(LightningModule):
         self.emb = self.forward()  # Compute embedding once for val phase
 
     def validation_step(self, batch, batch_idx):
-        user, item, label = batch
+        user, item, label = batch["user"], batch["item"], batch["label"]
         scores = self._compute_scores(self.emb, user, item)
 
         self.val_step_outputs.append(
@@ -109,7 +109,7 @@ class GCNRec(LightningModule):
         self.emb = self.forward()
 
     def test_step(self, batch, batch_idx):
-        user, item, label = batch
+        user, item, label = batch["user"], batch["item"], batch["label"]
         scores = self._compute_scores(self.emb, user, item)
 
         self.test_step_outputs.append(
@@ -213,7 +213,7 @@ class GCNRecID(LightningModule):
         self.emb = self.forward()  # Compute embedding once for val phase
 
     def validation_step(self, batch, batch_idx):
-        user, item, label = batch
+        user, item, label = batch["user"], batch["item"], batch["label"]
         scores = self._compute_scores(self.emb, user, item)
 
         self.val_step_outputs.append(
@@ -250,7 +250,7 @@ class GCNRecID(LightningModule):
         self.emb = self.forward()
 
     def test_step(self, batch, batch_idx):
-        user, item, label = batch
+        user, item, label = batch["user"], batch["item"], batch["label"]
         scores = self._compute_scores(self.emb, user, item)
 
         self.test_step_outputs.append(
