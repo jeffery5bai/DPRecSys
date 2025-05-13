@@ -25,12 +25,14 @@ def get_mlflow_logger(experiment_name: str, run_name: str) -> MLFlowLogger:
     )
 
 
-def get_callbacks(exp_name: str, run_name: str, patience: int) -> tuple:
+def get_callbacks(exp_name: str, run_name: str, patience: int, dirpath: str = "test_checkpoints/") -> tuple:
     """
     Set up callbacks for PyTorch Lightning.
     Args:
+        exp_name (str): Name of the MLflow experiment.
         run_name (str): Name of the MLflow run.
         patience (int): Number of epochs with no improvement after which training will be stopped.
+        dirpath (str): Directory path to save checkpoints.
     Returns:
         tuple: Tuple containing ModelCheckpoint and EarlyStopping callbacks.
     """
@@ -40,14 +42,14 @@ def get_callbacks(exp_name: str, run_name: str, patience: int) -> tuple:
         mode="max",  # or "max" if you're monitoring accuracy/F1
         save_top_k=1,
         save_weights_only=True,
-        dirpath="test_checkpoints/",
+        dirpath=dirpath,
         filename=f"{exp_name}-{run_name}-best-checkpoint-{{epoch:02d}}-{{val_f1:.2f}}",
         verbose=True,
     )
 
     # Define the early stopping callback
     early_stopping = EarlyStopping(monitor="val_f1", patience=patience, mode="max", verbose=True)
-    
+
     # Define the timer callback
     timer = Timer()
 
