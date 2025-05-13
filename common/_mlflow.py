@@ -25,7 +25,7 @@ def get_mlflow_logger(experiment_name: str, run_name: str) -> MLFlowLogger:
     )
 
 
-def get_callbacks(run_name: str, patience: int) -> tuple:
+def get_callbacks(exp_name: str, run_name: str, patience: int) -> tuple:
     """
     Set up callbacks for PyTorch Lightning.
     Args:
@@ -41,7 +41,7 @@ def get_callbacks(run_name: str, patience: int) -> tuple:
         save_top_k=1,
         save_weights_only=True,
         dirpath="test_checkpoints/",
-        filename=f"{run_name}-best-checkpoint-{{epoch:02d}}-{{val_f1:.2f}}",
+        filename=f"{exp_name}-{run_name}-best-checkpoint-{{epoch:02d}}-{{val_f1:.2f}}",
         verbose=True,
     )
 

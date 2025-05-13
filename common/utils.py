@@ -688,12 +688,8 @@ class ExperimentDataPreprocessor:
         edge_index = torch.tensor(
             np.array([df_split[USER_ID_FIELD].values, df_split[ITEM_ID_FIELD].values]), dtype=torch.long
         )
-        print("Building bi-directed edges (duplications)...")
-        edge_index = torch.cat((edge_index, edge_index[[1, 0]]), dim=1)  # [2, num_edges*2]
         print("Building labels...")
         edge_label = torch.tensor(df_split[LABEL_FIELD].values, dtype=torch.float)
-        print("Building bi-directed labels (duplications)...", "\n")
-        edge_label = torch.cat((edge_label, edge_label))
         data = Data(edge_index=edge_index, edge_label=edge_label)
         print("Interaction Graph:", data)
         print("Edge Index:", data.edge_index)
