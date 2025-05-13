@@ -5,14 +5,14 @@ sys.path.append(os.path.abspath(os.path.join(os.getcwd(), "..")))
 
 import torch
 import torch.nn.functional as F
-from modules.gcn_modules import GCN_ID_MODULE, GCNConvModule, GraphConvModule
+from modules.gcn_modules import GCN_ID_MODULE, GraphConvModule
 from pytorch_lightning import LightningModule
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
 
 
 class GCNRecCF(LightningModule):
     """
-    Wrap up `GraphConvModule` model and side information into Lightning Module as base recommendation model.
+    Wrap up `GraphConvModule` model into Lightning Module as base recommendation model.
     """
 
     def __init__(self, num_users, num_items, graph_data, dim_id=64, num_layers=3, concat=True, lr=1e-3):
@@ -46,12 +46,9 @@ class GCNRecCF(LightningModule):
         # NOTE: the dimension of user_emb = [num_user + 1, emb_dim], item_emb = [num_item + 1, emb_dim]
         # return dot-product of user and item embeddings
         return (user_emb[user_idx] * item_emb[item_idx]).sum(dim=1)
-        # return torch.sigmoid((user_emb[user_idx] * item_emb[item_idx]).sum(dim=1))
 
     def _evaluate(self, scores, label):
-        # loss = F.binary_cross_entropy(scores, label)
         loss = F.binary_cross_entropy_with_logits(scores, label)
-        # preds = scores > 0.5
         preds = torch.sigmoid(scores) > 0.5
         acc = accuracy_score(label.cpu(), preds.cpu())
         prec = precision_score(label.cpu(), preds.cpu(), zero_division=0)
@@ -155,6 +152,7 @@ class GCNRecCF(LightningModule):
         return torch.optim.Adam(self.parameters(), lr=self.lr)
 
 
+# Deprecated: the base module does not support bi-partite graph edge_index
 class GCNRecID(LightningModule):
     """
     Wrap up `GCN_ID_MODULE` model into Lightning Module as base recommendation model.
