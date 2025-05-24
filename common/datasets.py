@@ -17,6 +17,10 @@ ENCODED_COUNTRY_FIELD = "country_idx"
 ENCODED_DIRECTOR_FIELD = "directorID_idx"
 ENCODED_GENRE_FIELD = "genre_idx"
 
+ACTOR_DPS_FIELD = "actorID_dps"
+COUNTRY_DPS_FIELD = "country_dps"
+DIRECTOR_DPS_FIELD = "directorID_dps"
+GENRE_DPS_FIELD = "genre_dps"
 
 class UserItemPairDataset(Dataset):
     def __init__(self, df: pd.DataFrame):
@@ -54,6 +58,28 @@ class UserItemPairDataset(Dataset):
             else None
         )
 
+        # NOTE: diversity preference scale (DPS) labels
+        self.actor_dps = (
+            torch.tensor(df[ACTOR_DPS_FIELD].values, dtype=torch.float)
+            if ACTOR_DPS_FIELD in df.columns
+            else None
+        )
+        self.country_dps = (
+            torch.tensor(df[COUNTRY_DPS_FIELD].values, dtype=torch.float)
+            if COUNTRY_DPS_FIELD in df.columns
+            else None
+        )
+        self.director_dps = (
+            torch.tensor(df[DIRECTOR_DPS_FIELD].values, dtype=torch.float)
+            if DIRECTOR_DPS_FIELD in df.columns
+            else None
+        )
+        self.genre_dps = (
+            torch.tensor(df[GENRE_DPS_FIELD].values, dtype=torch.float)
+            if GENRE_DPS_FIELD in df.columns
+            else None
+        )
+
     def __len__(self):
         return len(self.labels)
 
@@ -66,4 +92,8 @@ class UserItemPairDataset(Dataset):
             "country": self.country_ids[idx],
             "director": self.director_ids[idx],
             "genre": self.genre_ids[idx],
+            "actor_dps": self.actor_dps[idx],
+            "country_dps": self.country_dps[idx],
+            "director_dps": self.director_dps[idx],
+            "genre_dps": self.genre_dps[idx],
         }

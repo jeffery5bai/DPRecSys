@@ -504,7 +504,7 @@ class FeatureEngineer:
         # NOTE: Create a mapping from vocab to index
         vocab2idx = {vocab: idx + 1 for idx, vocab in enumerate(sorted(vocabs))}
         vocab2idx[self.pad_token] = 0  # for paddings in train/test set
-        vocab2idx[self.oov_token] = len(vocab2idx) + 1  # for unknowns features in test set
+        vocab2idx[self.oov_token] = len(vocab2idx)  # for unknowns features in test set
         return vocab2idx
 
     def transform(
