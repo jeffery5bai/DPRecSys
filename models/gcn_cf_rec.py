@@ -30,6 +30,10 @@ class GCNRecCF(LightningModule):
 
         self.num_users = num_users
         self.num_items = num_items
+        self.graph_data = graph_data
+        self.dim_id = dim_id
+        self.num_layers = num_layers
+        self.concat = concat
         self.lr = lr
         self.user_emb = None
         self.item_emb = None

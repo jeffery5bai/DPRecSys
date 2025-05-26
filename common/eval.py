@@ -38,59 +38,72 @@ FEATURE_IDX_FIELD = ["actorID_idx", "country_idx", "directorID_idx", "genre_idx"
 IS_LIST_FEATURES = [True, False, False, True]
 
 
-def eval_user_diversity_preference_scale(
-    df_with_side_info: pd.DataFrame,
-    feature_vocab2idx: Dict[str, int],
-    normalized: bool = True,
-) -> pd.DataFrame:
-    """
-    Calculate the diversity preference scale (DPS) for each user based on their ratings and side information.
-    Args:
-        df_with_side_info (pd.DataFrame): DataFrame with user ratings and side information.
-            It should contain columns for user ID, item ID, rating, and encoded features.
-        feature_vocab2idx (Dict[str, int]): Dictionary mapping feature names to their vocabulary size.
-        normalized (bool): Whether to normalize the entropy values to [0, 1].
-    Returns:
-        pd.DataFrame: DataFrame with user IDs and their corresponding diversity preference scale (DPS) for each feature.
-    """
-
-    def _indices_to_multi_hot(indices: Union[int, List[int]], cardinality: int) -> np.ndarray:
-        vec = np.zeros(cardinality, dtype=int)
-        vec[indices] = 1
-        vec = vec[1:]  # to skip the first index (0) which is reserved for padding
-        return vec
-
-    # NOTE: calculate the diversity preference scale
-    user_groups = df_with_side_info.groupby(USER_ID_FIELD)
-    user_profiles = []
-    for user_id, df in tqdm(user_groups, desc="Calculating user diversity preference scale"):
-        user_profile = {USER_ID_FIELD: user_id}
-        ratings = df["rating"].values
-
-        for feat, feat_idx in zip(FEATURE_FIELD, FEATURE_IDX_FIELD):
-            # NOTE: transform the feature columns to multi-hot encoding
-            df[f"{feat}_vec"] = df[feat_idx].apply(
-                lambda x: _indices_to_multi_hot(x, len(feature_vocab2idx[feat]))
-            )
-
-            # NOTE: calculate the weighted average of the multi-hot vectors
-            multihots = np.stack(df[f"{feat}_vec"].values)
-            weighted_vec = (multihots * ratings[:, np.newaxis]).sum(axis=0)
-
-            user_profile[f"{feat}_dist"] = weighted_vec
-            user_profile[f"{feat}_dps"] = entropy(weighted_vec, normalized=normalized)
-
-        user_profiles.append(user_profile)
-
-    return pd.DataFrame(user_profiles)
+class Evaluator:
+    def __init__(self, seed: int = RANDOM_SEED):
+        """
+        Initialize the Evaluator with a random seed for reproducibility.
+        Args:
+            seed (int): Random seed for reproducibility.
+        """
+        self.seed = seed
+        seed_everything(seed)
 
 
-def entropy(vec, normalized=True):
-    """Calculate the Shannon Entropy of a vector."""
-    vec_sum = np.sum(vec)
-    if vec_sum == 0:
-        return np.nan  # undefined
+    def eval_user_diversity_preference_scale(
+        self,
+        df_with_side_info: pd.DataFrame,
+        feature_vocab2idx: Dict[str, int],
+        normalized: bool = True,
+    ) -> pd.DataFrame:
+        """
+        Calculate the diversity preference scale (DPS) for each user based on their ratings and side information.
+        Args:
+            df_with_side_info (pd.DataFrame): DataFrame with user ratings and side information.
+                It should contain columns for user ID, item ID, rating, and encoded features.
+            feature_vocab2idx (Dict[str, int]): Dictionary mapping feature names to their vocabulary size.
+            normalized (bool): Whether to normalize the entropy values to [0, 1].
+        Returns:
+            pd.DataFrame: DataFrame with user IDs and their corresponding diversity preference scale (DPS) for each feature.
+        """
 
-    p = vec / (vec_sum + 1e-8)  # normalize weighted vec to probability distribution
-    e = -np.sum(p[p > 0] * np.log(p[p > 0]))  # filter out zero entries to avoid log(0)
-    return (e / np.log(len(p))) if normalized else e  # normalize to [0, 1]
+        def _indices_to_multi_hot(indices: Union[int, List[int]], cardinality: int) -> np.ndarray:
+            vec = np.zeros(cardinality, dtype=int)
+            vec[indices] = 1
+            vec = vec[1:]  # to skip the first index (0) which is reserved for padding
+            return vec
+
+        # NOTE: calculate the diversity preference scale
+        user_groups = df_with_side_info.groupby(USER_ID_FIELD)
+        user_profiles = []
+        for user_id, df in tqdm(user_groups, desc="Calculating user diversity preference scale"):
+            user_profile = {USER_ID_FIELD: user_id}
+            ratings = df["rating"].values
+
+            for feat, feat_idx in zip(FEATURE_FIELD, FEATURE_IDX_FIELD):
+                # NOTE: transform the feature columns to multi-hot encoding
+                df[f"{feat}_vec"] = df[feat_idx].apply(
+                    lambda x: _indices_to_multi_hot(x, len(feature_vocab2idx[feat]))
+                )
+
+                # NOTE: calculate the weighted average of the multi-hot vectors
+                multihots = np.stack(df[f"{feat}_vec"].values)
+                weighted_vec = (multihots * ratings[:, np.newaxis]).sum(axis=0)
+
+                user_profile[f"{feat}_dist"] = weighted_vec
+                user_profile[f"{feat}_dps"] = self.entropy(weighted_vec, normalized=normalized)
+
+            user_profiles.append(user_profile)
+
+        return pd.DataFrame(user_profiles)
+
+    def entropy(self, vec, normalized=True):
+        """Calculate the Shannon Entropy of a vector."""
+        vec_sum = np.sum(vec)
+        if vec_sum == 0:
+            return np.nan  # undefined
+
+        p = vec / (vec_sum + 1e-8)  # normalize weighted vec to probability distribution
+        e = -np.sum(p[p > 0] * np.log(p[p > 0]))  # filter out zero entries to avoid log(0)
+        return (e / np.log(len(p))) if normalized else e  # normalize to [0, 1]
+    
+

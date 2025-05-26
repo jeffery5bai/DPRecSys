@@ -22,6 +22,7 @@ COUNTRY_DPS_FIELD = "country_dps"
 DIRECTOR_DPS_FIELD = "directorID_dps"
 GENRE_DPS_FIELD = "genre_dps"
 
+
 class UserItemPairDataset(Dataset):
     def __init__(self, df: pd.DataFrame):
         """
@@ -84,7 +85,7 @@ class UserItemPairDataset(Dataset):
         return len(self.labels)
 
     def __getitem__(self, idx) -> Tuple[Optional[torch.tensor]]:
-        return {
+        batch_data = {
             "user": self.user_ids[idx],
             "item": self.item_ids[idx],
             "label": self.labels[idx],
@@ -92,8 +93,15 @@ class UserItemPairDataset(Dataset):
             "country": self.country_ids[idx],
             "director": self.director_ids[idx],
             "genre": self.genre_ids[idx],
-            "actor_dps": self.actor_dps[idx],
-            "country_dps": self.country_dps[idx],
-            "director_dps": self.director_dps[idx],
-            "genre_dps": self.genre_dps[idx],
         }
+
+        dps_attrs = {
+            "actor_dps": self.actor_dps,
+            "country_dps": self.country_dps,
+            "director_dps": self.director_dps,
+            "genre_dps": self.genre_dps,
+        }
+
+        batch_data.update({name: dps[idx] for name, dps in dps_attrs.items() if dps is not None})
+
+        return batch_data
