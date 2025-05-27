@@ -1,3 +1,4 @@
+import gc
 import os
 import random
 import sys
@@ -65,36 +66,41 @@ class Evaluator:
             pd.DataFrame: DataFrame with user IDs and their corresponding diversity preference scale (DPS) for each feature.
         """
 
-        def _indices_to_multi_hot(indices: Union[int, List[int]], cardinality: int) -> np.ndarray:
-            vec = np.zeros(cardinality, dtype=int)
-            vec[indices] = 1
-            vec = vec[1:]  # to skip the first index (0) which is reserved for padding
-            return vec
-
         # NOTE: calculate the diversity preference scale
         user_groups = df_with_encoded_features.groupby(USER_ID_FIELD)
         user_profiles = []
-        for user_id, df in tqdm(user_groups, desc="Calculating user diversity preference scale"):
+        for i, (user_id, df) in enumerate(tqdm(user_groups, desc="Calculating user diversity preference scale")):
             user_profile = {USER_ID_FIELD: user_id}
             ratings = df["rating"].values
 
             for feat, feat_idx in zip(FEATURE_FIELD, FEATURE_IDX_FIELD):
                 # NOTE: transform the feature columns to multi-hot encoding
-                df[f"{feat}_vec"] = df[feat_idx].apply(
-                    lambda x: _indices_to_multi_hot(x, len(feature_vocab2idx[feat]))
+                feature_indices = df[feat_idx].values
+                multihots = np.array(
+                    [
+                        self._indices_to_multi_hot(indices, len(feature_vocab2idx[feat]))
+                        for indices in feature_indices
+                    ]
                 )
 
                 # NOTE: calculate the weighted average of the multi-hot vectors
-                multihots = np.stack(df[f"{feat}_vec"].values)
                 weighted_vec = (multihots * ratings[:, np.newaxis]).sum(axis=0)
 
-                user_profile[f"{feat}_vec"] = multihots
                 user_profile[f"{feat}_wvec"] = weighted_vec
                 user_profile[f"{feat}_dps"] = self.entropy(weighted_vec, normalized=normalized)
+                del multihots, weighted_vec
+            if i % 250 == 0:
+                gc.collect()
 
             user_profiles.append(user_profile)
 
         return pd.DataFrame(user_profiles)
+
+    def _indices_to_multi_hot(self, indices: Union[int, List[int]], cardinality: int) -> np.ndarray:
+        vec = np.zeros(cardinality, dtype=int)
+        vec[indices] = 1
+        vec = vec[1:]  # to skip the first index (0) which is reserved for padding
+        return vec
 
     def entropy(self, vec, normalized=True):
         """Calculate the Shannon Entropy of a vector."""

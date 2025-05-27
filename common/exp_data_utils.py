@@ -173,9 +173,15 @@ class ExperimentDataPreprocessor:
             result_dfs.append(sampled_df)
 
         triplet_df = pd.concat(result_dfs, ignore_index=True)
+        
+        # NOTE: Merge item features for positive and negative items
         triplet_df = triplet_df.merge(
             item_feature_df, left_on=POS_ITEM_FIELD, right_on=ITEM_ID_FIELD, how="inner"
-        )
+        ).rename(columns={f"{field}": f"pos_{field}" for field in FEATURE_IDX_FIELD})
+        triplet_df = triplet_df.merge(
+            item_feature_df, left_on=NEG_ITEM_FIELD, right_on=ITEM_ID_FIELD, how="inner"
+        ).rename(columns={f"{field}": f"neg_{field}" for field in FEATURE_IDX_FIELD})
+
         print(f"Original data count (positive samples): {len(df)}")
         print(
             f"Num of triplets: {len(df)}(pos samples) * {k_negative_samples}(negative sampled items) = {len(triplet_df)}"
