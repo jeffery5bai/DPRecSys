@@ -50,14 +50,14 @@ class Evaluator:
 
     def eval_user_diversity_preference_scale(
         self,
-        df_with_side_info: pd.DataFrame,
+        df_with_encoded_features: pd.DataFrame,
         feature_vocab2idx: Dict[str, int],
         normalized: bool = True,
     ) -> pd.DataFrame:
         """
         Calculate the diversity preference scale (DPS) for each user based on their ratings and side information.
         Args:
-            df_with_side_info (pd.DataFrame): DataFrame with user ratings and side information.
+            df_with_encoded_features (pd.DataFrame): DataFrame with user ratings and side information.
                 It should contain columns for user ID, item ID, rating, and encoded features.
             feature_vocab2idx (Dict[str, int]): Dictionary mapping feature names to their vocabulary size.
             normalized (bool): Whether to normalize the entropy values to [0, 1].
@@ -72,7 +72,7 @@ class Evaluator:
             return vec
 
         # NOTE: calculate the diversity preference scale
-        user_groups = df_with_side_info.groupby(USER_ID_FIELD)
+        user_groups = df_with_encoded_features.groupby(USER_ID_FIELD)
         user_profiles = []
         for user_id, df in tqdm(user_groups, desc="Calculating user diversity preference scale"):
             user_profile = {USER_ID_FIELD: user_id}
@@ -88,7 +88,8 @@ class Evaluator:
                 multihots = np.stack(df[f"{feat}_vec"].values)
                 weighted_vec = (multihots * ratings[:, np.newaxis]).sum(axis=0)
 
-                user_profile[f"{feat}_dist"] = weighted_vec
+                user_profile[f"{feat}_vec"] = multihots
+                user_profile[f"{feat}_wvec"] = weighted_vec
                 user_profile[f"{feat}_dps"] = self.entropy(weighted_vec, normalized=normalized)
 
             user_profiles.append(user_profile)

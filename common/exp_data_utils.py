@@ -28,6 +28,8 @@ MAX_USER_NUM, MAX_ITEM_NUM = None, None
 MIN_USER_NUM, MIN_ITEM_NUM = 0, 0
 USER_ID_FIELD = "userID"
 ITEM_ID_FIELD = "movieID"
+POS_ITEM_FIELD = "pos_item"
+NEG_ITEM_FIELD = "neg_item"
 YEAR_FIELD = "date_year"
 TIMESTAMP_FIELD = "timestamp"
 RATING_FIELD = "rating"
@@ -130,6 +132,55 @@ class ExperimentDataPreprocessor:
         print("Edge Index:", data.edge_index)
 
         return data
+
+    def prepare_triplet_df(
+        self, df_with_encoded_features: pd.DataFrame, k_negative_samples: int = 5, seed: int = RANDOM_SEED
+    ) -> pd.DataFrame:
+        """
+        Prepare the DataFrame for triplet-based training.
+        Args:
+            df_with_encoded_features (pd.DataFrame): The DataFrame containing user-item interactions with encoded features.
+        Returns:
+            pd.DataFrame: A DataFrame containing user-item pairs with ratings and encoded features.
+        """
+        # NOTE: Reserve item features and join after sampling
+        item_feature_df = (
+            df_with_encoded_features[[ITEM_ID_FIELD, *FEATURE_IDX_FIELD]]
+            .drop_duplicates([ITEM_ID_FIELD], ignore_index=True)
+            .copy()
+        )
+        all_items = item_feature_df[ITEM_ID_FIELD].unique()
+
+        # NOTE: Only keep positive samples for triplet-based training (implicit feedback)
+        df = (
+            df_with_encoded_features.loc[
+                df_with_encoded_features[LABEL_FIELD] == 1, [USER_ID_FIELD, ITEM_ID_FIELD]
+            ]
+            .rename(columns={ITEM_ID_FIELD: POS_ITEM_FIELD})
+            .copy()
+        )
+
+        result_dfs = []
+        np.random.seed(seed)
+        for user_id, user_df in df.groupby(USER_ID_FIELD):
+            user_items = user_df[POS_ITEM_FIELD].unique()
+            unseen_items = np.setdiff1d(all_items, user_items)
+            negative_items = np.random.choice(unseen_items, size=k_negative_samples, replace=False)
+
+            negative_df = pd.DataFrame({USER_ID_FIELD: user_id, NEG_ITEM_FIELD: negative_items})
+            sampled_df = user_df.merge(negative_df, on=[USER_ID_FIELD], how="left")
+
+            result_dfs.append(sampled_df)
+
+        triplet_df = pd.concat(result_dfs, ignore_index=True)
+        triplet_df = triplet_df.merge(
+            item_feature_df, left_on=POS_ITEM_FIELD, right_on=ITEM_ID_FIELD, how="inner"
+        )
+        print(f"Original data count (positive samples): {len(df)}")
+        print(
+            f"Num of triplets: {len(df)}(pos samples) * {k_negative_samples}(negative sampled items) = {len(triplet_df)}"
+        )
+        return triplet_df
 
     def prepare_prediction_df(self, df: pd.DataFrame, K: int = 500, seed=RANDOM_SEED) -> pd.DataFrame:
         """
