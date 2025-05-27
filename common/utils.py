@@ -358,6 +358,7 @@ class DataPreprocessor:
             .reset_index(name="genre")
         )
 
+
 class FeatureEngineer:
     """
     Feature Engineer for MovieLens dataset.
@@ -365,6 +366,7 @@ class FeatureEngineer:
 
     def __init__(self):
         self.vocab2idx = {}
+        self.idx2vocab = {}
         self.pad_token = "[PAD]"
         self.oov_token = "[OOV]"
 
@@ -441,6 +443,9 @@ class FeatureEngineer:
             self.vocab2idx[col] = self._fit_category_feature(df, col, is_list)
             print("Fitted: vocab2idx for", col)
 
+        # NOTE: get idx2vocab mapping
+        self._get_idx2vocab(self.vocab2idx)
+
     def _fit_re_index(
         self,
         df: pd.DataFrame,
@@ -476,7 +481,7 @@ class FeatureEngineer:
         print(f"Re-index mapping dumped into ...")
         print(f"user: {user_mapping_file}")
         print(f"item: {item_mapping_file}")
-        
+
         return user_vocab2idx, item_vocab2idx
 
     def _fit_category_feature(
@@ -506,6 +511,10 @@ class FeatureEngineer:
         vocab2idx[self.pad_token] = 0  # for paddings in train/test set
         vocab2idx[self.oov_token] = len(vocab2idx)  # for unknowns features in test set
         return vocab2idx
+
+    def _get_idx2vocab(self, vocab2idx: Dict[str, Dict[int, int]]) -> Dict[str, Dict[int, int]]:
+        for feat, mapping in vocab2idx.items():
+            self.idx2vocab[feat] = {v: k for k, v in mapping.items()}
 
     def transform(
         self,

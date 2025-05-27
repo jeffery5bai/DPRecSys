@@ -2,7 +2,7 @@ import os
 import random
 import sys
 from collections import Counter
-from typing import Dict, List, Set, Tuple, Union
+from typing import Any, Dict, List, Set, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -47,7 +47,6 @@ class Evaluator:
         """
         self.seed = seed
         seed_everything(seed)
-
 
     def eval_user_diversity_preference_scale(
         self,
@@ -105,5 +104,94 @@ class Evaluator:
         p = vec / (vec_sum + 1e-8)  # normalize weighted vec to probability distribution
         e = -np.sum(p[p > 0] * np.log(p[p > 0]))  # filter out zero entries to avoid log(0)
         return (e / np.log(len(p))) if normalized else e  # normalize to [0, 1]
-    
 
+    def prepare_evaluation_data(
+        self,
+        test_results_log: Dict[str, Union[torch.tensor, Any]],
+        idx2vocab: Dict[str, Dict[int, int]] = None,
+    ) -> pd.DataFrame:
+        """
+        Restructure the prediction log into a DataFrame for evaluation.
+        output schema: ["user", "rec_items", "gt_items"]
+        Args:
+            test_results_log (Dict[str, Union[torch.tensor, Any]]): Dictionary containing the test results.
+            idx2vocab (Dict[str, Dict[int, int]], optional): Mapping from index to original values for user and item IDs.
+        Returns:
+            pd.DataFrame: DataFrame with columns ["user", "rec_items", "gt_items"].
+                - "user": User ID
+                - "rec_items": List of recommended item IDs
+                - "gt_items": List of ground truth item IDs
+        """
+        selected_keys = ["user", "item", "score", "label"]
+        df = pd.DataFrame({key: test_results_log[key] for key in selected_keys})
+
+        if idx2vocab is not None:
+            # Map user and item IDs to their original values using idx2vocab
+            df["user"] = df["user"].apply(lambda x: idx2vocab[USER_ID_FIELD][x])
+            df["item"] = df["item"].apply(lambda x: idx2vocab[ITEM_ID_FIELD][x])
+
+        def _process_group(group: pd.DataFrame):
+            rec_items = group.sort_values("score", ascending=False)["item"].tolist()
+            gt_items = group[group["label"] == 1]["item"].tolist()
+            return pd.Series({"rec_items": rec_items, "gt_items": gt_items})
+
+        # apply the group transformation
+        return df.groupby("user").apply(_process_group, include_groups=False).reset_index()
+
+    def evaluate(self, eval_df: pd.DataFrame, K: int = 5) -> pd.DataFrame:
+        """
+        Evaluate the recommendations in eval_df using NDCG, recall, and precision at K.
+        Args:
+            eval_df (pd.DataFrame): DataFrame with columns ["user", "rec_items", "gt_items"].
+                - "user": User ID
+                - "rec_items": List of recommended item IDs
+                - "gt_items": List of ground truth item IDs
+            K (int): The number of top recommendations to consider for evaluation.
+        Returns:
+            pd.DataFrame: The input eval_df with additional columns for NDCG, recall, and precision at K.
+        """
+        eval_df[f"ndcg@{K}"] = eval_df.apply(
+            lambda row: self._ndcg_at_k(row["rec_items"], row["gt_items"], k=K), axis=1
+        )
+        eval_df[f"recall@{K}"] = eval_df.apply(
+            lambda row: self._recall_at_k(row["rec_items"], row["gt_items"], k=K), axis=1
+        )
+        eval_df[f"precision@{K}"] = eval_df.apply(
+            lambda row: self._precision_at_k(row["rec_items"], row["gt_items"], k=K), axis=1
+        )
+        return eval_df
+
+    def _ndcg_at_k(self, rec_items, gt_items, k=5):
+        """
+        Calculate the Normalized Discounted Cumulative Gain (NDCG) at k. (for single user)
+        Returns:
+            float: The NDCG score at k, normalized to [0, 1].
+        """
+
+        def dcg(relevance_scores):
+            return sum((2**rel - 1) / np.log2(idx + 2) for idx, rel in enumerate(relevance_scores))
+
+        relevance = [1 if item in gt_items else 0 for item in rec_items[:k]]
+        ideal_relevance = sorted(relevance, reverse=True)
+
+        dcg_score = dcg(relevance)
+        idcg_score = dcg(ideal_relevance)
+        return float(dcg_score / idcg_score) if idcg_score > 0 else 0.0
+
+    def _recall_at_k(self, rec_items, gt_items, k=5):
+        """
+        Calculate the recall at k. (for single user)
+        Returns:
+            float: The recall score at k, normalized to [0, 1].
+        """
+        hit_set = set(rec_items[:k]) & set(gt_items)
+        return len(hit_set) / len(gt_items) if gt_items else 0.0
+
+    def _precision_at_k(self, rec_items, gt_items, k=5):
+        """
+        Calculate the precision at k. (for single user)
+        Returns:
+            float: The precision score at k, normalized to [0, 1].
+        """
+        hit_set = set(rec_items[:k]) & set(gt_items)
+        return len(hit_set) / k
