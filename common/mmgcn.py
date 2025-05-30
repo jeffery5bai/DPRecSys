@@ -15,7 +15,7 @@ from torch_geometric.utils import remove_self_loops, add_self_loops, degree
 import torch_geometric
 
 from common.abstract_recommender import GeneralRecommender
-from common.loss import BPRLoss, EmbLoss
+from DPRecSys.modules.loss import BPRLoss, EmbLoss
 from common.init import xavier_uniform_initialization
 
 

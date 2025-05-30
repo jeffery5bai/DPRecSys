@@ -84,7 +84,7 @@ class TripletDataset(Dataset):
         )
 
     def __len__(self):
-        return len(self.labels)
+        return len(self.user_ids)
 
     def __getitem__(self, idx) -> Tuple[Optional[torch.tensor]]:
         batch_data = {

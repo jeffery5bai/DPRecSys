@@ -12,7 +12,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch_geometric
-from common.loss import BPRLoss, EmbLoss
 from torch_geometric.nn import GATConv, GCNConv, GraphConv, SAGEConv
 from torch_geometric.nn.conv import MessagePassing
 

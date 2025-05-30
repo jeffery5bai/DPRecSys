@@ -95,7 +95,7 @@ class ExperimentDataPreprocessor:
         print(
             f"Splitting data into train/valid/test by time period with ratio=({train_ratio} : {val_ratio} : {test_ratio}):"
         )
-        print(f"train: {len(df_train)} ({round(len(df_train) / total_cnt * 100, 2)}%")
+        print(f"train: {len(df_train)} ({round(len(df_train) / total_cnt * 100, 2)}%)")
         print(f"valid: {len(df_val)} ({round(len(df_val) / total_cnt * 100, 2)}%)")
         print(f"test: {len(df_test)} ({round(len(df_test) / total_cnt * 100, 2)}%)")
         print("---" * 10, "\n")
@@ -177,10 +177,18 @@ class ExperimentDataPreprocessor:
         # NOTE: Merge item features for positive and negative items
         triplet_df = triplet_df.merge(
             item_feature_df, left_on=POS_ITEM_FIELD, right_on=ITEM_ID_FIELD, how="inner"
-        ).rename(columns={f"{field}": f"pos_{field}" for field in FEATURE_IDX_FIELD})
-        triplet_df = triplet_df.merge(
-            item_feature_df, left_on=NEG_ITEM_FIELD, right_on=ITEM_ID_FIELD, how="inner"
-        ).rename(columns={f"{field}": f"neg_{field}" for field in FEATURE_IDX_FIELD})
+        ).drop(columns=[ITEM_ID_FIELD])
+        triplet_df = (
+            triplet_df.merge(
+                item_feature_df,
+                left_on=NEG_ITEM_FIELD,
+                right_on=ITEM_ID_FIELD,
+                how="inner",
+                suffixes=["", "_y"],
+            )
+            .rename(columns={f"{field}_y": f"neg_{field}" for field in FEATURE_IDX_FIELD + FEATURE_FIELD})
+            .drop(columns=[ITEM_ID_FIELD])
+        )
 
         print(f"Original data count (positive samples): {len(df)}")
         print(
