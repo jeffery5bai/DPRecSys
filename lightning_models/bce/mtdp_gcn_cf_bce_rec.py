@@ -1,11 +1,11 @@
 import os
 import sys
 
-sys.path.append(os.path.abspath(os.path.join(os.getcwd(), "..")))
+sys.path.append(os.path.abspath(os.path.join(os.getcwd(), "....")))
 
 import torch
 from common.loss import DPSLoss
-from lightning_models.gcn_cf_bce_rec import GCNRecCF
+from lightning_models.bce.gcn_cf_bce_rec import GCNRecCF
 from modules.dps_modules import DPSPredictor
 
 

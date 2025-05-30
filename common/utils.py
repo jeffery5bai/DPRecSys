@@ -29,7 +29,7 @@ RATING_THRESHOLD = 4.0
 
 # TODO: change this to filter out cold-start user/item
 MAX_USER_NUM, MAX_ITEM_NUM = None, None
-MIN_USER_NUM, MIN_ITEM_NUM = 0, 0
+MIN_USER_NUM, MIN_ITEM_NUM = 10, 0
 USER_ID_FIELD = "userID"
 ITEM_ID_FIELD = "movieID"
 YEAR_FIELD = "date_year"
