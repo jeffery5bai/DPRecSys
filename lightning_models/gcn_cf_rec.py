@@ -64,7 +64,11 @@ class GCNRec(LightningModule):
         bpr_loss = self.bpr_loss(yp_scores, yn_scores)
         reg_loss = self.reg_loss(user_emb, item_emb[pos_item], item_emb[neg_item])
         loss = bpr_loss + self.reg_weight * reg_loss
-        self.log_dict({"train_loss": loss, "train_bpr_loss": bpr_loss, "train_reg_loss": reg_loss})
+        self.log_dict(
+            {"train_loss": loss, "train_bpr_loss": bpr_loss, "train_reg_loss": self.reg_weight * reg_loss},
+            on_epoch=True,
+            on_step=True,
+        )
         return loss
 
     # NOTE: Validation
@@ -79,7 +83,7 @@ class GCNRec(LightningModule):
         bpr_loss = self.bpr_loss(yp_scores, yn_scores)
         reg_loss = self.reg_loss(self.user_emb, self.item_emb[pos_item], self.item_emb[neg_item])
         loss = bpr_loss + self.reg_weight * reg_loss
-        self.log_dict({"train_loss": loss, "train_bpr_loss": bpr_loss, "train_reg_loss": reg_loss})
+        self.log_dict({"train_loss": loss, "train_bpr_loss": bpr_loss, "train_reg_loss": self.reg_weight * reg_loss})
 
         self.val_step_outputs.append(
             {
