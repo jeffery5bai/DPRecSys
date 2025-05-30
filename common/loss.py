@@ -7,8 +7,7 @@ import torch.nn as nn
 
 
 class BPRLoss(nn.Module):
-
-    """ BPRLoss, based on Bayesian Personalized Ranking
+    """BPRLoss, based on Bayesian Personalized Ranking
 
     Args:
         - gamma(float): Small value to avoid division by zero
@@ -26,19 +25,60 @@ class BPRLoss(nn.Module):
         >>> output = loss(pos_score, neg_score)
         >>> output.backward()
     """
+
     def __init__(self, gamma=1e-10):
         super(BPRLoss, self).__init__()
         self.gamma = gamma
 
     def forward(self, pos_score, neg_score):
-        loss = - torch.log(self.gamma + torch.sigmoid(pos_score - neg_score)).mean()
+        loss = -torch.log(self.gamma + torch.sigmoid(pos_score - neg_score)).mean()
         return loss
 
 
-class EmbLoss(nn.Module):
-    """ EmbLoss, regularization on embeddings
+class DPSLoss(nn.Module):
+    """Diversity Preference Scale Loss (DPSLoss), auxiliary loss for diversity preference scale task
 
+    Args:
+        - dps_weights(dict): Weights for different diversity preference scale components.
+
+    Forward:
+        - scores: dict containing scores for different components, each of shape (N,)
+        - label: dict containing labels for different components, each of shape (N,)
+    Returns:
+        - dps_loss: scalar, the weighted sum of losses for each component
     """
+
+    def __init__(self, dps_weights=None):
+        super().__init__()
+        self.dps_weights = (
+            dps_weights
+            if dps_weights is not None
+            else {
+                "actor_dps": 0.25,
+                "country_dps": 0.25,
+                "director_dps": 0.25,
+                "genre_dps": 0.25,
+            }
+        )
+        self.loss_fn = nn.MSELoss()
+
+    def forward(self, scores, label):
+        actor_loss = self.loss_fn(scores["actor_dps"], label["actor_dps"])
+        country_loss = self.loss_fn(scores["country_dps"], label["country_dps"])
+        director_loss = self.loss_fn(scores["director_dps"], label["director_dps"])
+        genre_loss = self.loss_fn(scores["genre_dps"], label["genre_dps"])
+        dps_loss = (
+            self.dps_weights["actor_dps"] * actor_loss
+            + self.dps_weights["country_dps"] * country_loss
+            + self.dps_weights["director_dps"] * director_loss
+            + self.dps_weights["genre_dps"] * genre_loss
+        )
+        return dps_loss
+
+
+class EmbLoss(nn.Module):
+    """EmbLoss, regularization on embeddings"""
+
     def __init__(self, norm=2):
         super(EmbLoss, self).__init__()
         self.norm = norm
@@ -58,5 +98,5 @@ class L2Loss(nn.Module):
     def forward(self, *embeddings):
         l2_loss = torch.zeros(1).to(embeddings[-1].device)
         for embedding in embeddings:
-            l2_loss += torch.sum(embedding**2)*0.5
+            l2_loss += torch.sum(embedding**2) * 0.5
         return l2_loss

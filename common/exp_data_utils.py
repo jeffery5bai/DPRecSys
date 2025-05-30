@@ -28,12 +28,12 @@ MAX_USER_NUM, MAX_ITEM_NUM = None, None
 MIN_USER_NUM, MIN_ITEM_NUM = 0, 0
 USER_ID_FIELD = "userID"
 ITEM_ID_FIELD = "movieID"
-POS_ITEM_FIELD = "pos_item"
-NEG_ITEM_FIELD = "neg_item"
 YEAR_FIELD = "date_year"
 TIMESTAMP_FIELD = "timestamp"
 RATING_FIELD = "rating"
 LABEL_FIELD = "label"
+POS_ITEM_FIELD = "pos_item_id"
+NEG_ITEM_FIELD = "neg_item_id"
 FEATURE_FIELD = ["actorID", "country", "directorID", "genre"]
 FEATURE_IDX_FIELD = ["actorID_idx", "country_idx", "directorID_idx", "genre_idx"]
 IS_LIST_FEATURES = [True, False, False, True]
@@ -173,7 +173,7 @@ class ExperimentDataPreprocessor:
             result_dfs.append(sampled_df)
 
         triplet_df = pd.concat(result_dfs, ignore_index=True)
-        
+
         # NOTE: Merge item features for positive and negative items
         triplet_df = triplet_df.merge(
             item_feature_df, left_on=POS_ITEM_FIELD, right_on=ITEM_ID_FIELD, how="inner"

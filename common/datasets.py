@@ -11,6 +11,8 @@ YEAR_FIELD = "date_year"
 TIMESTAMP_FIELD = "timestamp"
 RATING_FIELD = "rating"
 LABEL_FIELD = "label"
+POS_ITEM_FIELD = "pos_item_id"
+NEG_ITEM_FIELD = "neg_item_id"
 
 ENCODED_ACTOR_FIELD = "actorID_idx"
 ENCODED_COUNTRY_FIELD = "country_idx"
@@ -23,10 +25,94 @@ DIRECTOR_DPS_FIELD = "directorID_dps"
 GENRE_DPS_FIELD = "genre_dps"
 
 
+class TripletDataset(Dataset):
+    def __init__(self, df: pd.DataFrame):
+        """
+        User-Item Triplet Dataset for training and validation (BPR).
+        Args:
+            df (pd.DataFrame): with columns ['userID', 'movieID', 'label'] (optional: encoded features)
+        """
+        self.user_ids = torch.tensor(df[USER_ID_FIELD].values, dtype=torch.long)
+        self.pos_item_ids = torch.tensor(df[POS_ITEM_FIELD].values, dtype=torch.long)
+        self.neg_item_ids = torch.tensor(df[NEG_ITEM_FIELD].values, dtype=torch.long)
+
+        self.actor_ids = (
+            torch.tensor(
+                np.array(df[ENCODED_ACTOR_FIELD].apply(lambda x: np.array(x)).tolist()), dtype=torch.long
+            )
+            if ENCODED_ACTOR_FIELD in df.columns
+            else None
+        )
+        self.country_ids = (
+            torch.tensor(df[ENCODED_COUNTRY_FIELD].values, dtype=torch.long)
+            if ENCODED_COUNTRY_FIELD in df.columns
+            else None
+        )
+        self.director_ids = (
+            torch.tensor(df[ENCODED_DIRECTOR_FIELD].values, dtype=torch.long)
+            if ENCODED_DIRECTOR_FIELD in df.columns
+            else None
+        )
+        self.genre_ids = (
+            torch.tensor(
+                np.array(df[ENCODED_GENRE_FIELD].apply(lambda x: np.array(x)).tolist()), dtype=torch.long
+            )
+            if ENCODED_GENRE_FIELD in df.columns
+            else None
+        )
+
+        # NOTE: diversity preference scale (DPS) labels
+        self.actor_dps = (
+            torch.tensor(df[ACTOR_DPS_FIELD].values, dtype=torch.float)
+            if ACTOR_DPS_FIELD in df.columns
+            else None
+        )
+        self.country_dps = (
+            torch.tensor(df[COUNTRY_DPS_FIELD].values, dtype=torch.float)
+            if COUNTRY_DPS_FIELD in df.columns
+            else None
+        )
+        self.director_dps = (
+            torch.tensor(df[DIRECTOR_DPS_FIELD].values, dtype=torch.float)
+            if DIRECTOR_DPS_FIELD in df.columns
+            else None
+        )
+        self.genre_dps = (
+            torch.tensor(df[GENRE_DPS_FIELD].values, dtype=torch.float)
+            if GENRE_DPS_FIELD in df.columns
+            else None
+        )
+
+    def __len__(self):
+        return len(self.labels)
+
+    def __getitem__(self, idx) -> Tuple[Optional[torch.tensor]]:
+        batch_data = {
+            "user": self.user_ids[idx],
+            "pos_item": self.pos_item_ids[idx],
+            "neg_item": self.neg_item_ids[idx],
+            "actor": self.actor_ids[idx],
+            "country": self.country_ids[idx],
+            "director": self.director_ids[idx],
+            "genre": self.genre_ids[idx],
+        }
+
+        dps_attrs = {
+            "actor_dps": self.actor_dps,
+            "country_dps": self.country_dps,
+            "director_dps": self.director_dps,
+            "genre_dps": self.genre_dps,
+        }
+
+        batch_data.update({name: dps[idx] for name, dps in dps_attrs.items() if dps is not None})
+
+        return batch_data
+
+
 class UserItemPairDataset(Dataset):
     def __init__(self, df: pd.DataFrame):
         """
-        User-Item Pair Dataset for training and evaluation.
+        User-Item Pair Dataset for training, validation (BCE) and evaluation (BPR).
         Args:
             df (pd.DataFrame): with columns ['userID', 'movieID', 'label'] (optional: encoded features)
         """

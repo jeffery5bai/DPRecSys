@@ -9,6 +9,7 @@ from models.gcn_cf_rec import GCNRecCF
 from modules.dps_modules import DPSPredictor
 from pytorch_lightning import LightningModule
 
+from common.loss import DPSLoss
 
 class MTDPRecGCNCF(GCNRecCF):
     """
@@ -32,32 +33,19 @@ class MTDPRecGCNCF(GCNRecCF):
 
         # NOTE: AT1 - Diversity Preference Scale (DPS)
         self.dps_module = DPSPredictor(emb_dim=self.dim_id)
-        self.dps_weights = (
-            dps_weights
-            if dps_weights is not None
-            else {
-                "actor_dps": 0.25,
-                "country_dps": 0.25,
-                "director_dps": 0.25,
-                "genre_dps": 0.25,
-            }
+        self.dps_loss_fn = DPSLoss(dps_weights=dps_weights)
+        self.dps_weights = self.dps_loss_fn.dps_weights
+
+    def _get_first_occurrence_indices(self, tensor: torch.Tensor):
+        """Get the first occurrence indices of unique values in a tensor."""
+        unique_vals, inverse_indices = torch.unique(tensor, return_inverse=True)
+
+        # NOTE: Find the first occurrence of each unique value
+        first_occurrence_indices = torch.full((unique_vals.size(0),), tensor.size(0), dtype=torch.long)
+        first_occurrence_indices = first_occurrence_indices.scatter_reduce_(
+            0, inverse_indices, torch.arange(tensor.size(0)), reduce="amin"
         )
-
-    def _evaluate_dps(self, scores, label):
-        loss_fn = F.mse_loss
-
-        actor_loss = loss_fn(scores["actor_dps"], label["actor_dps"])
-        country_loss = loss_fn(scores["country_dps"], label["country_dps"])
-        director_loss = loss_fn(scores["director_dps"], label["director_dps"])
-        genre_loss = loss_fn(scores["genre_dps"], label["genre_dps"])
-        dps_loss = (
-            self.dps_weights["actor_dps"] * actor_loss + 
-            self.dps_weights["country_dps"] * country_loss + 
-            self.dps_weights["director_dps"] * director_loss + 
-            self.dps_weights["genre_dps"] * genre_loss
-        )
-
-        return dps_loss
+        return unique_vals, first_occurrence_indices
 
     def training_step(self, batch, batch_idx):
         user, item, label = batch["user"], batch["item"], batch["label"]
@@ -73,15 +61,18 @@ class MTDPRecGCNCF(GCNRecCF):
         scores = self._compute_scores(user_emb, item_emb, user, item)
         loss, acc, prec, rec, f1 = self._evaluate(scores, label)
         self.log_dict(
-            {"train_loss": loss, "train_acc": acc, "train_prec": prec, "train_rec": rec, "train_f1": f1}
+            {"train_rec_loss": loss, "train_acc": acc, "train_prec": prec, "train_rec": rec, "train_f1": f1}
         )
 
         # NOTE: auxiliary task 1 - Diversity Preference Scale (DPS)
-        dps_scores = self.dps_module(user_emb, user)
-        dps_loss = self._evaluate_dps(dps_scores, dps_label)
+        unique_users, first_indices = self._get_first_occurrence_indices(user)
+        unique_dps_label = {k: v[first_indices] for k, v in dps_label.items()}
+        dps_scores = self.dps_module(user_emb, unique_users)
+        dps_loss = self.dps_loss_fn(dps_scores, unique_dps_label)
         self.log_dict({"train_dps_loss": dps_loss})
 
         # TODO: weighing the main task and auxiliary task losses
         total_loss = self.mt_weights["rec_loss"] * loss + self.mt_weights["dps_loss"] * dps_loss
+        self.log_dict({"train_loss": total_loss})
 
         return total_loss
