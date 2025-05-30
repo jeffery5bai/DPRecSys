@@ -4,12 +4,10 @@ import sys
 sys.path.append(os.path.abspath(os.path.join(os.getcwd(), "..")))
 
 import torch
-import torch.nn.functional as F
-from models.gcn_cf_rec import GCNRecCF
-from modules.dps_modules import DPSPredictor
-from pytorch_lightning import LightningModule
-
 from common.loss import DPSLoss
+from lightning_models.gcn_cf_bce_rec import GCNRecCF
+from modules.dps_modules import DPSPredictor
+
 
 class MTDPRecGCNCF(GCNRecCF):
     """
