@@ -1,8 +1,10 @@
 # setup MLflow logger and callbacks
 import os
+from typing import List
 
 from dotenv import load_dotenv
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint, Timer
+from pytorch_lightning.callbacks.callback import Callback
 from pytorch_lightning.loggers import MLFlowLogger
 
 load_dotenv(dotenv_path="../.env")
@@ -25,7 +27,14 @@ def get_mlflow_logger(experiment_name: str, run_name: str) -> MLFlowLogger:
     )
 
 
-def get_callbacks(exp_name: str, run_name: str, patience: int, dirpath: str = "test_checkpoints/") -> tuple:
+def get_callbacks(
+    run_name: str,
+    patience: int,
+    hyper_param_str: str = "",
+    exp_name: str = "",
+    monitor_metric: str = "val_loss",
+    monitor_mode: str = "min",
+) -> List[Callback]:
     """
     Set up callbacks for PyTorch Lightning.
     Args:
@@ -33,22 +42,24 @@ def get_callbacks(exp_name: str, run_name: str, patience: int, dirpath: str = "t
         run_name (str): Name of the MLflow run.
         patience (int): Number of epochs with no improvement after which training will be stopped.
         dirpath (str): Directory path to save checkpoints.
+        monitor_metric (str): Metric to monitor for early stopping and checkpointing. ('val_loss' or 'val_f1')
+        monitor_mode (str): Mode for monitoring ('min' for loss, 'max' for accuracy/F1).
     Returns:
-        tuple: Tuple containing ModelCheckpoint and EarlyStopping callbacks.
+        list: list containing ModelCheckpoint and EarlyStopping callbacks.
     """
     # Define the checkpoint callback
     checkpoint_callback = ModelCheckpoint(
-        monitor="val_f1",  # or "val_loss" if you're monitoring loss
-        mode="max",  # or "max" if you're monitoring accuracy/F1
+        monitor=monitor_metric,
+        mode=monitor_mode,
         save_top_k=1,
         save_weights_only=True,
-        dirpath=dirpath,
-        filename=f"{exp_name}-{run_name}-best-checkpoint-{{epoch:02d}}-{{val_f1:.2f}}",
+        dirpath=f"test_checkpoints/{exp_name}",
+        filename=f"{run_name}-{hyper_param_str}-best-checkpoint-{{epoch:02d}}-{{{monitor_metric}:.2f}}",
         verbose=True,
     )
 
     # Define the early stopping callback
-    early_stopping = EarlyStopping(monitor="val_f1", patience=patience, mode="max", verbose=True)
+    early_stopping = EarlyStopping(monitor=monitor_metric, patience=patience, mode=monitor_mode, verbose=True)
 
     # Define the timer callback
     timer = Timer()

@@ -1,6 +1,12 @@
 import os
-import random
 import sys
+
+# NOTE: Set environment variables for reproducibility and CUDA configurations
+os.environ["PYTHONHASHSEED"] = "42"
+os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
+sys.path.append(os.path.abspath(os.path.join(os.getcwd(), "..")))
+
+import random
 from collections import Counter
 from typing import Dict, List, Set, Tuple
 
@@ -9,8 +15,6 @@ import pandas as pd
 import torch
 from pytorch_lightning import seed_everything
 from torch_geometric.data import Data
-
-sys.path.append(os.path.abspath(os.path.join(os.getcwd(), "..")))
 
 # constant
 MOVIELENS_DATA_DIR = "../datasets/hetrec2011-movielens-2k-v2/user_ratedmovies.dat"
@@ -25,7 +29,7 @@ RATING_THRESHOLD = 4.0
 
 # TODO: change this to filter out cold-start user/item
 MAX_USER_NUM, MAX_ITEM_NUM = None, None
-MIN_USER_NUM, MIN_ITEM_NUM = 0, 0
+MIN_USER_NUM, MIN_ITEM_NUM = 10, 0
 USER_ID_FIELD = "userID"
 ITEM_ID_FIELD = "movieID"
 YEAR_FIELD = "date_year"
@@ -44,21 +48,23 @@ ITEM_MAPPING_DIR = "../datasets/itemid_mapping.csv"
 """
 Toolkits:
 - `set_seed`: Set random seed for reproducibility.
+- `seed_worker`: Set random seed for each worker in DataLoader.
 - `DataPreprocessor`: Class for data preprocessing.
     - `load_and_process_df`: Load and process the dataset.
         - `_get_illegal_ids_by_inter_num`: Get illegal ids by interaction number.
         - `_filter_by_threshold`: Filter out user/item with interactions less than min threshold.
-- `FeatureEngineer`: Class for feature engineering.
     - `join_item_features`: Join item features (actor, country, director, genre) to the DataFrame.
         - `_extract_top_k_actors`: Extract the top K actors for each movie.
         - `_extract_country`: Extract the country information from the country data file.
         - `_extract_director`: Extract the director information from the director data file.
         - `_extract_genres`: Extract the genre information from the genre data file.
-    - `encode_category_feature`: Encode categorical features using one-hot encoding.
-- `ExperimentDataPreprocessor`: Class for experiment preparation.
-    - `stratified_time_split`: Split the dataset into train, validation, and test sets based on user interactions over time.
-    - `create_interaction_graph`: Create a user-item interaction graph from the DataFrame.
-    - `prepare_prediction_df`: Prepare the prediction DataFrame for the test set.
+- `FeatureEngineer`: Class for feature engineering.
+    - `fit_transform`: Fit and transform categorical features to create a mapping from vocab to index.
+    - `fit`: Fit categorical features.
+        - `_fit_re_index`: Re-index the user and item mapping after joining and filtering.
+        - `_fit_category_feature`: Fit categorical features to create a mapping from vocab to index.
+        - `_get_idx2vocab`: Get idx2vocab mapping.
+    - `transform`: Encode categorical features.
 """
 
 
@@ -73,6 +79,7 @@ def set_seed(seed=RANDOM_SEED):
     np.random.seed(seed)
     print("numpy seed set to", seed)
     torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)  # if using multi-GPU
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False  # make sure the cudnn uses deterministic algorithms
@@ -82,10 +89,19 @@ def set_seed(seed=RANDOM_SEED):
     seed_everything(seed, workers=True)
     print("lightning seed set to", seed)
 
+    # NOTE: This will raise exceptions whenever a non-deterministic op is used
+    torch.use_deterministic_algorithms(True, warn_only=False)
+    print("torch set to use deterministic algorithms")
+
+
+def seed_worker(worker_id):
+    """Set random seed for each worker in DataLoader."""
+    worker_seed = torch.initial_seed() % 2**32
+    np.random.seed(worker_seed)
+    random.seed(worker_seed)
+
 
 # NOTE: Pre-process Dataset
-
-
 class DataPreprocessor:
     """
     Data Preprocessor for MovieLens dataset.
