@@ -30,7 +30,7 @@ class MTDPRecGCNCF(GCNRecCF):
         )
 
         # NOTE: AT1 - Diversity Preference Scale (DPS)
-        self.dps_module = DPSPredictor(emb_dim=self.dim_id)
+        self.dps_module = DPSPredictor(emb_dim=self.dim_id, concat_emb=False)
         self.dps_loss_fn = DPSLoss(dps_weights=dps_weights)
         self.dps_weights = self.dps_loss_fn.dps_weights
 

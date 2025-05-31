@@ -6,12 +6,15 @@ import torch.nn as nn
 
 
 class DPSPredictor(nn.Module):
-    def __init__(self, emb_dim: int):
+    def __init__(self, emb_dim: int, num_layers: int = 3, concat_emb: bool = True):
         """
         Args:
             emb_dim (int): Dimension of user embeddings
         """
         super().__init__()
+
+        # NOTE: NGCF concatenates embeddings from all layers as final embeddings
+        emb_dim = emb_dim * (num_layers + 1) if concat_emb else emb_dim
 
         # Define a separate pipeline (linear layer) for each feature
         self.actor_fc = nn.Linear(emb_dim, 1)
