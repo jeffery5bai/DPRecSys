@@ -16,6 +16,7 @@ class NGCF(nn.Module):
         self, edge_index, num_users, num_items, embedding_dim, num_layers, node_dropout=0.0, mess_dropout=0.0
     ):
         super().__init__()
+        self.register_buffer("edge_index", edge_index)
         self.edge_index = edge_index
         self.num_users = num_users + 1  # +1 for OOV
         self.num_items = num_items + 1  # +1 for OOV
@@ -32,7 +33,7 @@ class NGCF(nn.Module):
 
         # Define NGCF layers
         self.convs = nn.ModuleList()
-        for _ in range(len(num_layers)):
+        for _ in range(num_layers):
             self.convs.append(NGCFConv(embedding_dim, embedding_dim, dropout=node_dropout))
 
         # Dropout layer for message dropout

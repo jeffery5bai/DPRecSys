@@ -7,7 +7,7 @@ import torch
 from modules.loss import BPRLoss, EmbLoss
 from modules.ngcf_modules import NGCF
 from pytorch_lightning import LightningModule
-
+from common.eval import Evaluator
 
 class NGCFRec(LightningModule):
     """
@@ -48,6 +48,8 @@ class NGCFRec(LightningModule):
         self.test_step_outputs = []
         self.val_results = dict()
         self.test_results = dict()
+
+        self.evaluator = Evaluator()
 
         self.ngcf_model = NGCF(
             num_users=self.num_users,
@@ -95,36 +97,42 @@ class NGCFRec(LightningModule):
         self.user_emb, self.item_emb = self.ngcf_model()  # Compute embedding once for val phase
 
     def validation_step(self, batch, batch_idx):
-        user, pos_item, neg_item = batch["user"], batch["pos_item"], batch["neg_item"]
-        yp_scores = self.forward(self.user_emb, self.item_emb, user, pos_item)
-        yn_scores = self.forward(self.user_emb, self.item_emb, user, neg_item)
-
-        pair_loss = self.bpr_loss(yp_scores, yn_scores)
-        reg_loss = self.reg_loss(self.user_emb, self.item_emb[pos_item], self.item_emb[neg_item])
-        bpr_loss = pair_loss + self.reg_weight * reg_loss
-        self.log_dict(
-            {
-                "valid_bpr_loss": bpr_loss,
-                "valid_pair_loss": pair_loss,
-                "valid_reg_loss": self.reg_weight * reg_loss,
-            }
-        )
+        """We use user-item pairs for inference, so we need to compute scores for each pair."""
+        user, item, label = batch["user"], batch["item"], batch["label"]
+        scores = self.forward(self.user_emb, self.item_emb, user, item)
 
         self.val_step_outputs.append(
             {
-                "bpr_loss": bpr_loss,
-                "pair_loss": pair_loss,
-                "reg_loss": reg_loss,
+                "users": user,
+                "items": item,
+                "scores": scores,
+                "labels": label,
             }
         )
 
     def on_validation_epoch_end(self):
         outputs = self.val_step_outputs
-        avg_bpr_loss = torch.tensor([x["bpr_loss"] for x in outputs]).mean()
-        avg_pair_loss = torch.tensor([x["pair_loss"] for x in outputs]).mean()
-        avg_reg_loss = torch.tensor([x["reg_loss"] for x in outputs]).mean()
+        all_users = torch.cat([x["users"] for x in outputs])
+        all_items = torch.cat([x["items"] for x in outputs])
+        all_scores = torch.cat([x["scores"] for x in outputs])
+        all_labels = torch.cat([x["labels"] for x in outputs])
 
-        metrics = {"val_bpr_loss": avg_bpr_loss, "val_pair_loss": avg_pair_loss, "val_reg_loss": avg_reg_loss}
+        self.val_results = {
+            "user": all_users.cpu(),
+            "item": all_items.cpu(),
+            "score": all_scores.cpu(),
+            "label": all_labels.cpu(),
+        }
+
+        eval_df = self.evaluator.prepare_evaluation_data(self.val_results)
+        eval_score_df = self.evaluator.evaluate(eval_df, K=5)
+        eval_score_df = self.evaluator.evaluate(eval_score_df, K=10)
+        eval_score_df = self.evaluator.evaluate(eval_score_df, K=20)
+        metrics = {
+            f"val_{metric}{k}": eval_score_df[f"{metric}@{k}"].mean()
+            for metric in ["ndcg", "precision", "recall"]
+            for k in [5, 10, 20]
+        }
         self.log_dict(metrics, prog_bar=True)
 
     # NOTE: Testing/Inference
@@ -160,6 +168,19 @@ class NGCFRec(LightningModule):
             "user_emb": self.user_emb.cpu(),
             "item_emb": self.item_emb.cpu(),
         }
+
+        eval_df = self.evaluator.prepare_evaluation_data(self.test_results)
+        eval_score_df = self.evaluator.evaluate(eval_df, K=5)
+        eval_score_df = self.evaluator.evaluate(eval_score_df, K=10)
+        eval_score_df = self.evaluator.evaluate(eval_score_df, K=20)
+        metrics = {
+            f"test_{metric}{k}": eval_score_df[f"{metric}@{k}"].mean()
+            for metric in ["ndcg", "precision", "recall"]
+            for k in [5, 10, 20]
+        }
+        self.log_dict(metrics, prog_bar=True)
+        self.test_results["eval_score_df"] = eval_score_df
+
 
     def configure_optimizers(self):
         return torch.optim.Adam(self.parameters(), lr=self.lr)

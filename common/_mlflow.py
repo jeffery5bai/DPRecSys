@@ -32,8 +32,8 @@ def get_callbacks(
     patience: int,
     hyper_param_str: str = "",
     exp_name: str = "",
-    monitor_metric: str = "val_loss",
-    monitor_mode: str = "min",
+    monitor_metric: str = "val_ndcg10",
+    monitor_mode: str = "max",
 ) -> List[Callback]:
     """
     Set up callbacks for PyTorch Lightning.
@@ -42,8 +42,8 @@ def get_callbacks(
         run_name (str): Name of the MLflow run.
         patience (int): Number of epochs with no improvement after which training will be stopped.
         dirpath (str): Directory path to save checkpoints.
-        monitor_metric (str): Metric to monitor for early stopping and checkpointing. ('val_loss' or 'val_f1')
-        monitor_mode (str): Mode for monitoring ('min' for loss, 'max' for accuracy/F1).
+        monitor_metric (str): Metric to monitor for early stopping and checkpointing. ('val_ndcg@5', 'val_loss' or 'val_f1')
+        monitor_mode (str): Mode for monitoring ('min' for loss, 'max' for accuracy/F1/NDCG).
     Returns:
         list: list containing ModelCheckpoint and EarlyStopping callbacks.
     """
