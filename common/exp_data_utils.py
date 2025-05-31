@@ -1,14 +1,12 @@
 import os
-import random
 import sys
-from collections import Counter
 from typing import Dict, List, Set, Tuple
 
 import numpy as np
 import pandas as pd
 import torch
-from pytorch_lightning import seed_everything
 from torch_geometric.data import Data
+from torch_geometric.utils import to_undirected
 
 sys.path.append(os.path.abspath(os.path.join(os.getcwd(), "..")))
 
@@ -107,11 +105,12 @@ class ExperimentDataPreprocessor:
         return df_train, df_val, df_test
 
     # NOTE: User-Item Bi-partite Graph Construction
-    def create_interaction_graph(self, df_split: pd.DataFrame) -> Data:
+    def create_interaction_graph(self, df_split: pd.DataFrame, is_offset: bool = True) -> Data:
         """
         Create a user-item interaction graph from the DataFrame.
         Args:
             df_split (pd.DataFrame): The input DataFrame containing user-item interactions.
+            is_offset (bool): Whether to apply an offset to item IDs for bi-partite graph construction.
         Returns:
             Data: A PyTorch Geometric Data object representing the user-item interaction graph.
         """
@@ -122,9 +121,14 @@ class ExperimentDataPreprocessor:
         print("  Num of positive interactions:", len(df_split), "\n")
 
         print("Building edges...")
+        # NOTE: bi-partite graph construction. Unified Embedding Matrix in propagation -> offset item IDs; Separate Embedding Matrices -> no offset
+        # NOTE: +1 for OOV
+        offset = (df_split[USER_ID_FIELD].nunique() + 1) if is_offset else 0
         edge_index = torch.tensor(
-            np.array([df_split[USER_ID_FIELD].values, df_split[ITEM_ID_FIELD].values]), dtype=torch.long
+            np.array([df_split[USER_ID_FIELD].values, df_split[ITEM_ID_FIELD].values + offset]),
+            dtype=torch.long,
         )
+        edge_index = to_undirected(edge_index)
         print("Building labels...")
         edge_label = torch.tensor(df_split[LABEL_FIELD].values, dtype=torch.float)
         data = Data(edge_index=edge_index, edge_label=edge_label)
