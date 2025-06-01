@@ -73,22 +73,18 @@ class Evaluator:
             tqdm(user_groups, desc="Calculating user diversity preference scale")
         ):
             user_profile = {USER_ID_FIELD: user_id}
-            ratings = torch.tensor(df["rating"].values, dtype=torch.float32)
+            ratings = df[RATING_FIELD].values
 
             for feat, feat_idx in zip(FEATURE_FIELD, FEATURE_IDX_FIELD):
                 # NOTE: transform the feature columns to multi-hot encoding
                 feature_indices = df[feat_idx].values
                 cardinality = len(feature_vocab2idx[feat])
-                multihots = torch.stack(
-                    [
-                        self._indices_to_multi_hot(indices, cardinality)
-                        for indices in feature_indices
-                    ]
+                multihots = np.stack(
+                    [self._indices_to_multi_hot(indices, cardinality) for indices in feature_indices]
                 )
 
                 # NOTE: calculate the weighted average of the multi-hot vectors
-                weighted_vec = (ratings.unsqueeze(1) * multihots).sum(dim=0)
-                # weighted_vec = (multihots * ratings[:, np.newaxis]).sum(axis=0)
+                weighted_vec = (multihots * ratings[:, np.newaxis]).sum(axis=0)
 
                 user_profile[f"{feat}_wvec"] = weighted_vec
                 user_profile[f"{feat}_dps"] = self.entropy(weighted_vec, normalized=normalized)
@@ -100,25 +96,21 @@ class Evaluator:
 
         return pd.DataFrame(user_profiles)
 
-    def _indices_to_multi_hot(self, indices: Union[int, List[int]], cardinality: int) -> torch.Tensor:
-        vec = torch.zeros(cardinality, dtype=torch.int32)
+    def _indices_to_multi_hot(self, indices: Union[int, List[int]], cardinality: int) -> np.ndarray:
+        vec = np.zeros(cardinality, dtype=np.int32)
         vec[indices] = 1
-        vec = vec[1:]  # to skip the first index (0) which is reserved for padding
+        vec = vec[2:]  # to skip the first and index (0, 1) which is reserved for padding and rare tokens
         return vec
 
     def entropy(self, vec, normalized=True):
         """Calculate the Shannon Entropy of a tensor vector."""
-        vec_sum = vec.sum()
-        # vec_sum = np.sum(vec)
+        vec_sum = np.sum(vec)
         if vec_sum == 0:
-            return float("nan")  # if the sum is zero, entropy is undefined
-            # return np.nan  # undefined
+            return np.nan  # undefined
 
         p = vec / (vec_sum + 1e-8)  # normalize weighted vec to probability distribution
-        # e = -np.sum(p[p > 0] * np.log(p[p > 0]))  # filter out zero entries to avoid log(0)
-        e = -torch.sum(p[p > 0] * torch.log(p[p > 0]))  # filter out zero entries to avoid log(0)
-        # return (e / np.log(len(p))) if normalized else e  # normalize to [0, 1]
-        return (e / torch.log(torch.tensor(len(p)))).item() if normalized else e.item()  # normalize to [0, 1]
+        e = -np.sum(p[p > 0] * np.log(p[p > 0]))  # filter out zero entries to avoid log(0)
+        return (e / np.log(len(p))) if normalized else e  # normalize to [0, 1]
 
     def get_item_feature_multihot_vec(
         self, df_with_encoded_features: pd.DataFrame, feature_vocab2idx: Dict[str, int]

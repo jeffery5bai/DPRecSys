@@ -14,6 +14,8 @@ LABEL_FIELD = "label"
 POS_ITEM_FIELD = "pos_item_id"
 NEG_ITEM_FIELD = "neg_item_id"
 
+FEATURE_FIELD = ["actorID", "country", "directorID", "genre"]
+
 ENCODED_ACTOR_FIELD = "actorID_idx"
 ENCODED_COUNTRY_FIELD = "country_idx"
 ENCODED_DIRECTOR_FIELD = "directorID_idx"
@@ -83,6 +85,29 @@ class TripletDataset(Dataset):
             else None
         )
 
+        # NOTE: item features multihot encoding
+        for feature in FEATURE_FIELD:
+            feature_vec_col_name = f"{feature}_vec"
+            feature_wvec_col_name = f"{feature}_wvec"
+            setattr(
+                self,
+                feature_vec_col_name,
+                (
+                    torch.from_numpy(np.stack(df[feature_vec_col_name].values))
+                    if feature_vec_col_name in df.columns
+                    else None
+                ),
+            )
+            setattr(
+                self,
+                feature_wvec_col_name,
+                (
+                    torch.from_numpy(np.stack(df[feature_wvec_col_name].values))
+                    if feature_wvec_col_name in df.columns
+                    else None
+                ),
+            )
+
     def __len__(self):
         return len(self.user_ids)
 
@@ -103,8 +128,17 @@ class TripletDataset(Dataset):
             "director_dps": self.director_dps,
             "genre_dps": self.genre_dps,
         }
-
         batch_data.update({name: dps[idx] for name, dps in dps_attrs.items() if dps is not None})
+
+        item_vec_attrs = {
+            f"{feature}_vec": getattr(self, f"{feature}_vec", None) for feature in FEATURE_FIELD
+        }
+        batch_data.update({name: vec[idx] for name, vec in item_vec_attrs.items() if vec is not None})
+
+        item_wvec_attrs = {
+            f"{feature}_wvec": getattr(self, f"{feature}_wvec", None) for feature in FEATURE_FIELD
+        }
+        batch_data.update({name: wvec[idx] for name, wvec in item_wvec_attrs.items() if wvec is not None})
 
         return batch_data
 

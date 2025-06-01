@@ -27,6 +27,11 @@ RANDOM_SEED = 42
 YEAR_RANGE = (2006, 2008)
 RATING_THRESHOLD = 4.0
 
+# special tokens
+PAD_TOKEN = "[PAD]"
+OOV_TOKEN = "[OOV]"
+RARE_TOKEN = "[RARE]"
+
 # TODO: change this to filter out cold-start user/item
 MAX_USER_NUM, MAX_ITEM_NUM = None, None
 MIN_USER_NUM, MIN_ITEM_NUM = 10, 0
@@ -100,8 +105,12 @@ def seed_worker(worker_id):
     np.random.seed(worker_seed)
     random.seed(worker_seed)
 
+
 def segment_reduce(
-    x: torch.Tensor, segment_ids: torch.Tensor, reduce_type: str, device: torch.device,
+    x: torch.Tensor,
+    segment_ids: torch.Tensor,
+    reduce_type: str,
+    device: torch.device,
 ) -> torch.Tensor:
     """
     Segment reduce a tensor based on segment ids.
@@ -118,15 +127,25 @@ def segment_reduce(
     num_unique = unique_ids.size(0)
 
     if x.dim() == 1:
-        sum_per_segment = torch.zeros(num_unique, dtype=x.dtype, device=device).scatter_add(0, inverse_indices, x)
-        count_per_segment = torch.zeros(num_unique, dtype=torch.int64, device=device).scatter_add(0, inverse_indices, torch.ones_like(x, dtype=torch.int64, device=device))
-    elif x.dim() == 2: # 2D tensor
+        sum_per_segment = torch.zeros(num_unique, dtype=x.dtype, device=device).scatter_add(
+            0, inverse_indices, x
+        )
+        count_per_segment = torch.zeros(num_unique, dtype=torch.int64, device=device).scatter_add(
+            0, inverse_indices, torch.ones_like(x, dtype=torch.int64, device=device)
+        )
+    elif x.dim() == 2:  # 2D tensor
         emb_dim = x.size(1)
-        sum_per_segment = torch.zeros(num_unique, emb_dim, dtype=x.dtype, device=device).scatter_add(0, inverse_indices.unsqueeze(1).expand(-1, emb_dim), x)
-        count_per_segment = torch.zeros(num_unique, 1, dtype=torch.int64, device=device).scatter_add(0, inverse_indices.unsqueeze(1), torch.ones_like(x[:, :1], dtype=torch.int64, device=device))
+        sum_per_segment = torch.zeros(num_unique, emb_dim, dtype=x.dtype, device=device).scatter_add(
+            0, inverse_indices.unsqueeze(1).expand(-1, emb_dim), x
+        )
+        count_per_segment = torch.zeros(num_unique, 1, dtype=torch.int64, device=device).scatter_add(
+            0, inverse_indices.unsqueeze(1), torch.ones_like(x[:, :1], dtype=torch.int64, device=device)
+        )
     else:
-        raise NotImplementedError(f"Unsupported tensor dimension: {x.dim()}. Only 1D and 2D tensors are supported.")
-    
+        raise NotImplementedError(
+            f"Unsupported tensor dimension: {x.dim()}. Only 1D and 2D tensors are supported."
+        )
+
     if reduce_type == "mean":
         return sum_per_segment / count_per_segment.clamp(min=1)
     elif reduce_type == "sum":
@@ -143,13 +162,16 @@ class DataPreprocessor:
     Data Preprocessor for MovieLens dataset.
     """
 
+    def __init__(self):
+        self.pad_token = PAD_TOKEN
+        self.oov_token = OOV_TOKEN
+        self.rare_token = RARE_TOKEN
+
     def load_and_process_df(
         self,
         file_dir: str = MOVIELENS_DATA_DIR,
         year_range: Tuple[int] = YEAR_RANGE,
         rating_threshold: float = RATING_THRESHOLD,
-        u_mapping_file: str = USER_MAPPING_DIR,
-        i_mapping_file: str = ITEM_MAPPING_DIR,
         user_col: str = USER_ID_FIELD,
         item_col: str = ITEM_ID_FIELD,
         year_col: str = YEAR_FIELD,
@@ -165,8 +187,7 @@ class DataPreprocessor:
         Args:
             file_dir (str): The path to the dataset file.
             year_range (Tuple[int]): The range of years to filter the data.
-            u_mapping_file (str): The path to save the user mapping file.
-            i_mapping_file (str): The path to save the item mapping file.
+            rating_threshold (float): The threshold for rating to label the target.
         Returns:
             pd.DataFrame: The processed DataFrame containing user-item interactions.
         """
@@ -307,7 +328,7 @@ class DataPreprocessor:
         director_file_dir: str = DIRECTOR_DATA_DIR,
         genre_file_dir: str = GENRE_DATA_DIR,
         actor_k: int = 5,
-        pad_token: str = "[PAD]",
+        threshold: int = 0,
     ) -> pd.DataFrame:
         """
         Join item features (actor, country, director, genre) to the DataFrame.
@@ -318,16 +339,15 @@ class DataPreprocessor:
             director_file_dir (str): The path to the director data file.
             genre_file_dir (str): The path to the genre data file.
             actor_k (int): The number of top actors to extract.
-            pad_token (str): The padding token to use for categorical features.
         Returns:
             pd.DataFrame: The DataFrame with joined item features.
         """
         # NOTE: Extract features
         print("extracting item features...")
-        actor_df = self._extract_top_k_actors(file_dir=actor_file_dir, K=actor_k, pad_token=pad_token)
-        country_df = self._extract_country(file_dir=country_file_dir)
-        director_df = self._extract_director(file_dir=director_file_dir)
-        genre_df = self._extract_genres(file_dir=genre_file_dir, pad_token=pad_token)
+        actor_df = self._extract_top_k_actors(file_dir=actor_file_dir, K=actor_k, threshold=threshold)
+        country_df = self._extract_country(file_dir=country_file_dir, threshold=threshold)
+        director_df = self._extract_director(file_dir=director_file_dir, threshold=threshold)
+        genre_df = self._extract_genres(file_dir=genre_file_dir, threshold=threshold)
 
         # NOTE: Merge features (inner join)
         print("merging features...")
@@ -342,73 +362,135 @@ class DataPreprocessor:
         return df
 
     def _extract_top_k_actors(
-        self, file_dir: str = ACTOR_DATA_DIR, K: int = 5, pad_token: str = "[PAD]"
+        self, file_dir: str = ACTOR_DATA_DIR, K: int = 5, threshold: int = 0
     ) -> pd.DataFrame:
         """
         Extract the top K actors for each movie from the actor data file. (1-to-N mapping)
         Args:
             file_dir (str): The path to the actor data file.
             K (int): The number of top actors to extract.
-            pad_token (str): The padding token to use for actors.
+            threshold (int): The minimum number of interactions for an actor to be considered.
         Returns:
             pd.DataFrame: A DataFrame containing the top K actors for each movie.
         """
         actor_df = pd.read_table(file_dir, encoding="latin-1")
-        return (
+        actor_df = (
             actor_df.groupby("movieID")
             .apply(
                 lambda df: (
-                    df.sort_values("ranking").head(K)["actorID"].tolist() + [pad_token] * max(0, K - len(df))
+                    df.sort_values("ranking").head(K)["actorID"].tolist()
+                    + [self.pad_token] * max(0, K - len(df))
                 )[:K]
             )  # ensure no longer than K
             .reset_index(name="actorID")
         )
+        return self._mark_rare_categories(
+            actor_df,
+            col="actorID",
+            is_list=True,
+            threshold=threshold,
+        )
 
-    def _extract_country(self, file_dir: str = COUNTRY_DATA_DIR) -> pd.DataFrame:
+    def _extract_country(self, file_dir: str = COUNTRY_DATA_DIR, threshold: int = 0) -> pd.DataFrame:
         """
         Extract the country information from the country data file. (1-to-1 mapping)
         Args:
             file_dir (str): The path to the country data file.
+            threshold (int): The minimum number of interactions for a country to be considered.
         Returns:
             pd.DataFrame: A DataFrame containing the country information for each movie.
         """
         country_df = pd.read_table(file_dir)
-        return country_df
+        return self._mark_rare_categories(
+            country_df,
+            col="country",
+            is_list=False,
+            threshold=threshold,
+        )
+        # return country_df
 
-    def _extract_director(self, file_dir: str = DIRECTOR_DATA_DIR) -> pd.DataFrame:
+    def _extract_director(self, file_dir: str = DIRECTOR_DATA_DIR, threshold: int = 0) -> pd.DataFrame:
         """
         Extract the director information from the director data file. (1-to-1 mapping)
         Args:
             file_dir (str): The path to the director data file.
+            threshold (int): The minimum number of interactions for a director to be considered.
         Returns:
             pd.DataFrame: A DataFrame containing the director information for each movie.
         """
         director_df = pd.read_table(file_dir, encoding="latin-1")
-        return director_df
+        return self._mark_rare_categories(
+            director_df,
+            col="directorID",
+            is_list=False,
+            threshold=threshold,
+        )
+        # return director_df
 
-    def _extract_genres(
-        self, file_dir: str = GENRE_DATA_DIR, K: int = 8, pad_token: str = "[PAD]"
-    ) -> pd.DataFrame:
+    def _extract_genres(self, file_dir: str = GENRE_DATA_DIR, K: int = 8, threshold: int = 0) -> pd.DataFrame:
         """
         Extract the genre information from the genre data file. (1-to-N mapping)
         Args:
             file_dir (str): The path to the genre data file.
             K (int): The max number of genres (by EDA).
-            pad_token (str): The padding token to use for genres.
         Returns:
             pd.DataFrame: A DataFrame containing the genre information for each movie.
         """
         genre_df = pd.read_table(file_dir)
-
-        return (
+        genre_df = (
             genre_df.groupby("movieID")
             .apply(
-                lambda df: (df.head(K)["genre"].tolist() + [pad_token] * max(0, K - len(df)))[
+                lambda df: (df.head(K)["genre"].tolist() + [self.pad_token] * max(0, K - len(df)))[
                     :K
                 ]  # ensure no longer than K
             )
             .reset_index(name="genre")
         )
+        return self._mark_rare_categories(
+            genre_df,
+            col="genre",
+            is_list=True,
+            threshold=threshold,
+        )
+
+        # return (
+        #     genre_df.groupby("movieID")
+        #     .apply(
+        #         lambda df: (df.head(K)["genre"].tolist() + [self.pad_token] * max(0, K - len(df)))[
+        #             :K
+        #         ]  # ensure no longer than K
+        #     )
+        #     .reset_index(name="genre")
+        # )
+
+    def _mark_rare_categories(
+        self,
+        df: pd.DataFrame,
+        col: str,
+        is_list: bool,
+        threshold: int = 0,
+    ) -> pd.DataFrame:
+
+        # NOTE: Replace infrequent items with the special token: self.rare_token
+        all_categories = (
+            [str(cat_feat) for cat_list in df[col] for cat_feat in cat_list]
+            if is_list
+            else df[col].astype(str).tolist()
+        )
+
+        # Count the frequency of each category
+        freq_counter = Counter(all_categories)
+        frequent_categories = {item for item, count in freq_counter.items() if count >= threshold}
+
+        # Replace infrequent items with the special token
+        df[col] = (
+            df[col].apply(
+                lambda lst: [item if str(item) in frequent_categories else self.rare_token for item in lst]
+            )
+            if is_list
+            else df[col].apply(lambda item: item if str(item) in frequent_categories else self.rare_token)
+        )
+        return df
 
 
 class FeatureEngineer:
@@ -419,8 +501,9 @@ class FeatureEngineer:
     def __init__(self):
         self.vocab2idx = {}
         self.idx2vocab = {}
-        self.pad_token = "[PAD]"
-        self.oov_token = "[OOV]"
+        self.pad_token = PAD_TOKEN
+        self.oov_token = OOV_TOKEN
+        self.rare_token = RARE_TOKEN
 
     def fit_transform(
         self,
@@ -554,13 +637,14 @@ class FeatureEngineer:
         if is_list:
             # NOTE: Flatten all actor/genre lists and build unique vocabulary
             vocabs = set(str(cat_feat) for cat_list in df[col] for cat_feat in cat_list)
-            vocabs -= set([self.pad_token])  # remove padding token
+            vocabs -= set([self.pad_token, self.rare_token])  # remove padding token and rare token
         else:
             vocabs = set(df[col].astype(str))
 
         # NOTE: Create a mapping from vocab to index
-        vocab2idx = {vocab: idx + 1 for idx, vocab in enumerate(sorted(vocabs))}
+        vocab2idx = {vocab: idx + 2 for idx, vocab in enumerate(sorted(vocabs))}
         vocab2idx[self.pad_token] = 0  # for paddings in train/test set
+        vocab2idx[self.rare_token] = 1  # for rare categories in train/test set
         vocab2idx[self.oov_token] = len(vocab2idx)  # for unknowns features in test set
         return vocab2idx
 
