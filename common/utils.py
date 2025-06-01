@@ -100,6 +100,42 @@ def seed_worker(worker_id):
     np.random.seed(worker_seed)
     random.seed(worker_seed)
 
+def segment_reduce(
+    x: torch.Tensor, segment_ids: torch.Tensor, reduce_type: str, device: torch.device,
+) -> torch.Tensor:
+    """
+    Segment reduce a tensor based on segment ids.
+    Args:
+        x (torch.Tensor): The input tensor to be reduced.
+        segment_ids (torch.Tensor): The segment ids for reduction.
+        reduce_type (str): The type of reduction to apply ('mean', 'sum', 'max').
+    Returns:
+        torch.Tensor: The reduced tensor.
+    """
+    unique_ids, inverse_indices = torch.unique(segment_ids, sorted=False, return_inverse=True)
+    unique_ids = unique_ids.to(device)
+    inverse_indices = inverse_indices.to(device)
+    num_unique = unique_ids.size(0)
+
+    if x.dim() == 1:
+        sum_per_segment = torch.zeros(num_unique, dtype=x.dtype, device=device).scatter_add(0, inverse_indices, x)
+        count_per_segment = torch.zeros(num_unique, dtype=torch.int64, device=device).scatter_add(0, inverse_indices, torch.ones_like(x, dtype=torch.int64, device=device))
+    elif x.dim() == 2: # 2D tensor
+        emb_dim = x.size(1)
+        sum_per_segment = torch.zeros(num_unique, emb_dim, dtype=x.dtype, device=device).scatter_add(0, inverse_indices.unsqueeze(1).expand(-1, emb_dim), x)
+        count_per_segment = torch.zeros(num_unique, 1, dtype=torch.int64, device=device).scatter_add(0, inverse_indices.unsqueeze(1), torch.ones_like(x[:, :1], dtype=torch.int64, device=device))
+    else:
+        raise NotImplementedError(f"Unsupported tensor dimension: {x.dim()}. Only 1D and 2D tensors are supported.")
+    
+    if reduce_type == "mean":
+        return sum_per_segment / count_per_segment.clamp(min=1)
+    elif reduce_type == "sum":
+        return sum_per_segment
+    elif reduce_type == "count":
+        return count_per_segment.squeeze(1)
+    else:
+        raise NotImplementedError(f"Unsupported reduce type: {reduce_type}")
+
 
 # NOTE: Pre-process Dataset
 class DataPreprocessor:

@@ -85,14 +85,48 @@ class DPSLoss(nn.Module):
         self.loss_fn = nn.MSELoss()
 
     def forward(self, scores, label):
-        actor_loss = self.loss_fn(scores["actor_dps"], label["actor_dps"])
-        country_loss = self.loss_fn(scores["country_dps"], label["country_dps"])
-        director_loss = self.loss_fn(scores["director_dps"], label["director_dps"])
-        genre_loss = self.loss_fn(scores["genre_dps"], label["genre_dps"])
-        dps_loss = (
-            self.dps_weights["actor_dps"] * actor_loss
-            + self.dps_weights["country_dps"] * country_loss
-            + self.dps_weights["director_dps"] * director_loss
-            + self.dps_weights["genre_dps"] * genre_loss
-        )
+        dps_loss = 0.0
+        for key, weight in self.dps_weights.items():
+            if key in scores and key in label:
+                loss = self.loss_fn(scores[key], label[key])
+                dps_loss += weight * loss
+
         return dps_loss
+
+
+class DPRLoss(nn.Module):
+    """Diversity Preference Regularization Loss (DPRLoss), auxiliary loss for diversity preference regularization task
+
+    Args:
+        - dpr_weights(dict): Weights for different diversity preference scale components.
+
+    Forward:
+        - scores: dict containing scores for different components, each of shape (N,)
+        - label: dict containing labels for different components, each of shape (N,)
+    Returns:
+        - dpr_loss: scalar, the weighted sum of losses for each component
+    """
+
+    def __init__(self, dpr_weights=None):
+        super().__init__()
+        self.dpr_weights = (
+            dpr_weights
+            if dpr_weights is not None
+            else {
+                "actor_dpr": 0.25,
+                "country_dpr": 0.25,
+                "director_dpr": 0.25,
+                "genre_dpr": 0.25,
+            }
+        )
+        self.loss_fn = nn.MSELoss()
+
+    def forward(self, scores, label):
+        dpr_loss = 0.0
+        for key, weight in self.dpr_weights.items():
+            label_key = key.replace("dpr", "dps")
+            if key in scores and label_key in label:
+                loss = self.loss_fn(scores[key], label[label_key])
+                dpr_loss += weight * loss
+
+        return dpr_loss

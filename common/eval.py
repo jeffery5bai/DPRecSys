@@ -69,22 +69,26 @@ class Evaluator:
         # NOTE: calculate the diversity preference scale
         user_groups = df_with_encoded_features.groupby(USER_ID_FIELD)
         user_profiles = []
-        for i, (user_id, df) in enumerate(tqdm(user_groups, desc="Calculating user diversity preference scale")):
+        for i, (user_id, df) in enumerate(
+            tqdm(user_groups, desc="Calculating user diversity preference scale")
+        ):
             user_profile = {USER_ID_FIELD: user_id}
-            ratings = df["rating"].values
+            ratings = torch.tensor(df["rating"].values, dtype=torch.float32)
 
             for feat, feat_idx in zip(FEATURE_FIELD, FEATURE_IDX_FIELD):
                 # NOTE: transform the feature columns to multi-hot encoding
                 feature_indices = df[feat_idx].values
-                multihots = np.array(
+                cardinality = len(feature_vocab2idx[feat])
+                multihots = torch.stack(
                     [
-                        self._indices_to_multi_hot(indices, len(feature_vocab2idx[feat]))
+                        self._indices_to_multi_hot(indices, cardinality)
                         for indices in feature_indices
                     ]
                 )
 
                 # NOTE: calculate the weighted average of the multi-hot vectors
-                weighted_vec = (multihots * ratings[:, np.newaxis]).sum(axis=0)
+                weighted_vec = (ratings.unsqueeze(1) * multihots).sum(dim=0)
+                # weighted_vec = (multihots * ratings[:, np.newaxis]).sum(axis=0)
 
                 user_profile[f"{feat}_wvec"] = weighted_vec
                 user_profile[f"{feat}_dps"] = self.entropy(weighted_vec, normalized=normalized)
@@ -96,21 +100,53 @@ class Evaluator:
 
         return pd.DataFrame(user_profiles)
 
-    def _indices_to_multi_hot(self, indices: Union[int, List[int]], cardinality: int) -> np.ndarray:
-        vec = np.zeros(cardinality, dtype=int)
+    def _indices_to_multi_hot(self, indices: Union[int, List[int]], cardinality: int) -> torch.Tensor:
+        vec = torch.zeros(cardinality, dtype=torch.int32)
         vec[indices] = 1
         vec = vec[1:]  # to skip the first index (0) which is reserved for padding
         return vec
 
     def entropy(self, vec, normalized=True):
-        """Calculate the Shannon Entropy of a vector."""
-        vec_sum = np.sum(vec)
+        """Calculate the Shannon Entropy of a tensor vector."""
+        vec_sum = vec.sum()
+        # vec_sum = np.sum(vec)
         if vec_sum == 0:
-            return np.nan  # undefined
+            return float("nan")  # if the sum is zero, entropy is undefined
+            # return np.nan  # undefined
 
         p = vec / (vec_sum + 1e-8)  # normalize weighted vec to probability distribution
-        e = -np.sum(p[p > 0] * np.log(p[p > 0]))  # filter out zero entries to avoid log(0)
-        return (e / np.log(len(p))) if normalized else e  # normalize to [0, 1]
+        # e = -np.sum(p[p > 0] * np.log(p[p > 0]))  # filter out zero entries to avoid log(0)
+        e = -torch.sum(p[p > 0] * torch.log(p[p > 0]))  # filter out zero entries to avoid log(0)
+        # return (e / np.log(len(p))) if normalized else e  # normalize to [0, 1]
+        return (e / torch.log(torch.tensor(len(p)))).item() if normalized else e.item()  # normalize to [0, 1]
+
+    def get_item_feature_multihot_vec(
+        self, df_with_encoded_features: pd.DataFrame, feature_vocab2idx: Dict[str, int]
+    ) -> pd.DataFrame:
+        """
+        Transform the item features in df_with_encoded_features to multi-hot encoding vectors.
+        Args:
+            df_with_encoded_features (pd.DataFrame): DataFrame with item features and their encoded indices.
+                It should contain columns for item ID, feature fields, and their corresponding indices.
+            feature_vocab2idx (Dict[str, int]): Dictionary mapping feature names to their vocabulary size.
+        Returns:
+            pd.DataFrame: DataFrame with item IDs and their corresponding multi-hot encoded feature vectors.
+                The columns will be [ITEM_ID_FIELD, f"{feat}_vec"] for each feature in FEATURE_FIELD.
+        """
+        item_feature_vec_df = (
+            df_with_encoded_features[[ITEM_ID_FIELD] + FEATURE_IDX_FIELD]
+            .drop_duplicates(subset=ITEM_ID_FIELD, keep="first")
+            .reset_index(drop=True)
+        ).copy()
+
+        for feat, feat_idx in zip(FEATURE_FIELD, FEATURE_IDX_FIELD):
+            # NOTE: transform the feature columns to multi-hot encoding
+            feature_indices = item_feature_vec_df[feat_idx].values
+            item_feature_vec_df[f"{feat}_vec"] = [
+                self._indices_to_multi_hot(indices, len(feature_vocab2idx[feat]))
+                for indices in feature_indices
+            ]
+        return item_feature_vec_df[[ITEM_ID_FIELD] + [f"{feat}_vec" for feat in FEATURE_FIELD]]
 
     def prepare_evaluation_data(
         self,
