@@ -47,7 +47,7 @@ class MTDPRecSRM(NGCFRec):
         # NOTE: Auxiliary task 3 - Diversity Preference Matching (DPM)
         self.dpm_module = DPMatcher()
         self.dpm_loss_fn = KLDivergenceLoss(dpm_weights=dpm_weights)
-        self.dpm_weights = self.dpr_loss_fn.dpm_weights
+        self.dpm_weights = self.dpm_loss_fn.dpm_weights
 
     def _get_first_occurrence_indices(self, tensor: torch.Tensor):
         """Get the first occurrence indices of unique values in a tensor."""
@@ -82,10 +82,10 @@ class MTDPRecSRM(NGCFRec):
             "genre_pd": batch["genre_wvec"],
         }
         dpm_vec = {
-            "actor_pd": batch["actor_vec"],
-            "country_pd": batch["country_vec"],
-            "director_pd": batch["director_vec"],
-            "genre_pd": batch["genre_vec"],
+            "actor_vec": batch["actor_vec"],
+            "country_vec": batch["country_vec"],
+            "director_vec": batch["director_vec"],
+            "genre_vec": batch["genre_vec"],
         }
 
         # NOTE: Main task: BPR (Pair-wise + L2 regularization loss)

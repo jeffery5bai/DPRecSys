@@ -34,6 +34,7 @@ class TripletDataset(Dataset):
         Args:
             df (pd.DataFrame): with columns ['userID', 'movieID', 'label'] (optional: encoded features)
         """
+        self.features = ["actor", "country", "director", "genre"]
         self.user_ids = torch.tensor(df[USER_ID_FIELD].values, dtype=torch.long)
         self.pos_item_ids = torch.tensor(df[POS_ITEM_FIELD].values, dtype=torch.long)
         self.neg_item_ids = torch.tensor(df[NEG_ITEM_FIELD].values, dtype=torch.long)
@@ -86,24 +87,24 @@ class TripletDataset(Dataset):
         )
 
         # NOTE: item features multihot encoding
-        for feature in FEATURE_FIELD:
-            feature_vec_col_name = f"{feature}_vec"
-            feature_wvec_col_name = f"{feature}_wvec"
+        for feat, feature_field in zip(self.features, FEATURE_FIELD):
+            vec_attr_name, vec_col_name = f"{feat}_vec", f"{feature_field}_vec"
+            wvec_attr_name, wvec_col_name = f"{feat}_wvec", f"{feature_field}_wvec"
             setattr(
                 self,
-                feature_vec_col_name,
+                vec_attr_name,
                 (
-                    torch.from_numpy(np.stack(df[feature_vec_col_name].values))
-                    if feature_vec_col_name in df.columns
+                    torch.from_numpy(np.stack(df[vec_col_name].values))
+                    if vec_col_name in df.columns
                     else None
                 ),
             )
             setattr(
                 self,
-                feature_wvec_col_name,
+                wvec_attr_name,
                 (
-                    torch.from_numpy(np.stack(df[feature_wvec_col_name].values))
-                    if feature_wvec_col_name in df.columns
+                    torch.from_numpy(np.stack(df[wvec_col_name].values))
+                    if wvec_col_name in df.columns
                     else None
                 ),
             )
@@ -131,12 +132,12 @@ class TripletDataset(Dataset):
         batch_data.update({name: dps[idx] for name, dps in dps_attrs.items() if dps is not None})
 
         item_vec_attrs = {
-            f"{feature}_vec": getattr(self, f"{feature}_vec", None) for feature in FEATURE_FIELD
+            f"{feature}_vec": getattr(self, f"{feature}_vec", None) for feature in self.features
         }
         batch_data.update({name: vec[idx] for name, vec in item_vec_attrs.items() if vec is not None})
 
         item_wvec_attrs = {
-            f"{feature}_wvec": getattr(self, f"{feature}_wvec", None) for feature in FEATURE_FIELD
+            f"{feature}_wvec": getattr(self, f"{feature}_wvec", None) for feature in self.features
         }
         batch_data.update({name: wvec[idx] for name, wvec in item_wvec_attrs.items() if wvec is not None})
 
