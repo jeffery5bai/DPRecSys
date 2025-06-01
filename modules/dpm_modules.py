@@ -8,12 +8,9 @@ import torch.nn as nn
 from common.utils import segment_reduce
 
 
-class DPMatch(nn.Module):
+class DPMatcher(nn.Module):
     def __init__(
         self,
-        emb_dim: int,
-        num_layers: int = 3,
-        concat_emb: bool = True,
         features: List[str] = ["actor", "country", "director", "genre"],
     ):
         """
@@ -24,37 +21,30 @@ class DPMatch(nn.Module):
             features (List[str]): List of features for which DPR scores will be predicted
         """
         super().__init__()
-
-        # NOTE: NGCF concatenates embeddings from all layers as final embeddings
         self.features = features
-        emb_dim = emb_dim * (num_layers + 1) if concat_emb else emb_dim
-
-        # NOTE: Project item embeddings into another space as feature representation
-        # Define separate pipelines (linear layer) for each feature
-        self.feature_fcs = nn.ModuleDict({feature: nn.Linear(emb_dim, emb_dim) for feature in features})
 
     def forward(
-        self, user_emb: torch.Tensor, user_idx: torch.Tensor, item_emb: torch.Tensor, item_idx: torch.Tensor
+        self, 
+        yp_scores: torch.Tensor,
+        user_idx: torch.Tensor,  
+        item_vec: Dict[str, torch.Tensor],
     ) -> Dict[str, torch.Tensor]:
         """
         Args:
-            user_emb (Tensor): [n_users, emb_dim] user embeddings
-            user_idx (Tensor): [batch_size, 1] user idx in the batch
-            item_emb (Tensor): [n_items, emb_dim] item embeddings
-            item_idx (Tensor): [batch_size, 1] item idx in the batch
+            yp_scores (Tensor): [batch_size, 1] predicted scores for the user-item pair
+            user_idx (Tensor): [batch_size, 1] user indices in the batch
+            item_vec (Dict[str, Tensor]): Dictionary containing item feature vectors,
+                                          each of shape [batch_size, emb_dim]
         Returns:
-            A dict with predicted DPR scores (in range [0, 1]) for each feature
+            A dict with expected DPM probability distributions for each feature (num_users, D)
         """
-        device = user_emb.device
-        input_user_emb = user_emb[user_idx]  # (batch_size, emb_dim)
-        input_item_emb = item_emb[item_idx]  # (batch_size, emb_dim)
-
-        dpr_scores = {}
+        device = user_idx.device
+        dpm_prob_dist = {}
 
         for feature in self.features:
-            projected_item_emb = self.feature_fcs[feature](input_item_emb)  # (batch_size, emb_dim)
-            distance = torch.norm(input_user_emb - projected_item_emb, dim=-1)  # (batch_size,)
-            mean_feature_distance_by_user = segment_reduce(distance, user_idx, "mean", device)  # (n_users,)
-            dpr_scores[f"{feature}_dpr"] = torch.sigmoid(mean_feature_distance_by_user).squeeze(-1)
+            feat_vec = item_vec[f"{feature}_vec"]
+            expected_feature_vec = torch.sigmoid(yp_scores).unsqueeze(1) * feat_vec
+            agg_expected_feature_vec_by_user = segment_reduce(expected_feature_vec, user_idx, "sum", device)  # (n_users,)
+            dpm_prob_dist[f"{feature}_pd"] = agg_expected_feature_vec_by_user
 
-        return dpr_scores
+        return dpm_prob_dist

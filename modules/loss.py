@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 
 class BPRLoss(nn.Module):
@@ -130,3 +131,51 @@ class DPRLoss(nn.Module):
                 dpr_loss += weight * loss
 
         return dpr_loss
+
+
+class KLDivergenceLoss(nn.Module):
+    """KL Divergence Loss for 2D probability distributions.
+
+    Each input tensor is expected to have shape (N, D), where each row is a distribution.
+    The inputs are first normalized so that each row sums to 1.
+
+    Forward:
+        - pred: (N, D) tensor of raw predicted probabilities
+        - target: (N, D) tensor of raw target probabilities
+    Returns:
+        - scalar loss (mean over the batch)
+
+    Example::
+
+        >>> loss_fn = KLDivergenceLoss()
+        >>> P = torch.rand(3, 5, requires_grad=True)
+        >>> Q = torch.rand(3, 5)
+        >>> loss = loss_fn(P, Q)
+        >>> loss.backward()
+    """
+
+    def __init__(self, dpm_weights=None):
+        super().__init__()
+        self.dpm_weights = (
+            dpm_weights
+            if dpm_weights is not None
+            else {
+                "actor_pd": 0.25,
+                "country_pd": 0.25,
+                "director_pd": 0.25,
+                "genre_pd": 0.25,
+            }
+        )
+        self.loss_fn = nn.KLDivLoss(reduction='batchmean')
+
+    def forward(self, pred, target):
+        dpm_loss = 0.0
+        for key, weight in self.dpm_weights.items():
+            if key in pred and key in target:
+                pred_log_prob = F.log_softmax(pred[key], dim=1)
+                target_prob = F.softmax(target[key], dim=1)
+
+                loss = self.loss_fn(pred_log_prob, target_prob)
+                dpm_loss += weight * loss
+
+        return dpm_loss

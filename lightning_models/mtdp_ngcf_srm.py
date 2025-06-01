@@ -7,17 +7,19 @@ import torch
 from lightning_models.ngcf import NGCFRec
 from modules.dpr_modules import DPRegularizer
 from modules.dps_modules import DPSPredictor
-from modules.loss import DPRLoss, DPSLoss
+from modules.dpm_modules import DPMatcher
+from modules.loss import DPRLoss, DPSLoss, KLDivergenceLoss
 
 
-class MTDPRecSR(NGCFRec):
+class MTDPRecSRM(NGCFRec):
     """
     `NGCF` model with Auxiliary Tasks.
     - Diversity Preference Scale Prediction (DPS) (S)
     - Diversity Preference Regularization (DPR) (R)
+    - Diversity Preference Matching (DPM) (M)
     """
 
-    def __init__(self, dps_weights=None, dpr_weights=None, mt_weights=None, **kwargs):
+    def __init__(self, dps_weights=None, dpr_weights=None, dpm_weights=None, mt_weights=None, **kwargs):
         super().__init__(**kwargs)
         self.save_hyperparameters()
 
@@ -28,6 +30,7 @@ class MTDPRecSR(NGCFRec):
                 "rec_loss": 1.0,
                 "dps_loss": 1.0,
                 "dpr_loss": 1.0,
+                "dpm_loss": 1.0,
             }
         )
 
@@ -40,6 +43,11 @@ class MTDPRecSR(NGCFRec):
         self.dpr_module = DPRegularizer(emb_dim=self.embedding_dim, num_layers=self.num_layers)
         self.dpr_loss_fn = DPRLoss(dpr_weights=dpr_weights)
         self.dpr_weights = self.dpr_loss_fn.dpr_weights
+
+        # NOTE: Auxiliary task 3 - Diversity Preference Matching (DPM)
+        self.dpm_module = DPMatcher()
+        self.dpm_loss_fn = KLDivergenceLoss(dpm_weights=dpm_weights)
+        self.dpm_weights = self.dpr_loss_fn.dpm_weights
 
     def _get_first_occurrence_indices(self, tensor: torch.Tensor):
         """Get the first occurrence indices of unique values in a tensor."""
@@ -66,6 +74,18 @@ class MTDPRecSR(NGCFRec):
             "country_dps": batch["country_dps"],
             "director_dps": batch["director_dps"],
             "genre_dps": batch["genre_dps"],
+        }
+        dpm_label = {
+            "actor_pd": batch["actor_wvec"],
+            "country_pd": batch["country_wvec"],
+            "director_pd": batch["director_wvec"],
+            "genre_pd": batch["genre_wvec"],
+        }
+        dpm_vec = {
+            "actor_pd": batch["actor_vec"],
+            "country_pd": batch["country_vec"],
+            "director_pd": batch["director_vec"],
+            "genre_pd": batch["genre_vec"],
         }
 
         # NOTE: Main task: BPR (Pair-wise + L2 regularization loss)
@@ -100,11 +120,19 @@ class MTDPRecSR(NGCFRec):
         dpr_loss = self.dpr_loss_fn(dpr_scores, unique_dps_label)
         self.log_dict({"train_dpr_loss": dpr_loss}, on_epoch=True, on_step=True)
 
+        # NOTE: Auxiliary task 3 - Diversity Preference Matching (DPM)
+        unique_users, first_indices = self._get_first_occurrence_indices(user)
+        unique_dpm_label = {k: v[first_indices] for k, v in dpm_label.items()}
+        dpm_prob_dist = self.dpm_module(yp_scores, user, dpm_vec)
+        dpm_loss = self.dpm_loss_fn(dpm_prob_dist, unique_dpm_label)
+        self.log_dict({"train_dpm_loss": dpm_loss}, on_epoch=True, on_step=True)
+
         # TODO: weighing the main task and auxiliary task losses
         total_loss = (
             self.mt_weights["rec_loss"] * bpr_loss
             + self.mt_weights["dps_loss"] * dps_loss
             + self.mt_weights["dpr_loss"] * dpr_loss
+            + self.mt_weights["dpm_loss"] * dpm_loss
         )
         self.log_dict({"train_loss": total_loss}, on_epoch=True, on_step=True)
 
