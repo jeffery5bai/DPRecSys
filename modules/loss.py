@@ -169,13 +169,14 @@ class KLDivergenceLoss(nn.Module):
         self.loss_fn = nn.KLDivLoss(reduction='batchmean')
 
     def forward(self, pred, target):
-        dpm_loss = 0.0
+        device = next(iter(pred.values())).device
+        dpm_losses = []
         for key, weight in self.dpm_weights.items():
             if key in pred and key in target:
                 pred_log_prob = F.log_softmax(pred[key], dim=1)
                 target_prob = F.softmax(target[key], dim=1)
 
                 loss = self.loss_fn(pred_log_prob, target_prob)
-                dpm_loss += weight * loss
+                dpm_losses.append(weight * loss)
 
-        return dpm_loss
+        return torch.stack(dpm_losses).sum() if dpm_losses else torch.tensor(0.0, device=device)
