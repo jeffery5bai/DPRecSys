@@ -5,7 +5,7 @@ from typing import Dict, List, Set, Tuple
 import numpy as np
 import pandas as pd
 import torch
-from torch_geometric.data import Data
+from torch_geometric.data import Data, HeteroData
 from torch_geometric.utils import to_undirected
 
 sys.path.append(os.path.abspath(os.path.join(os.getcwd(), "..")))
@@ -32,6 +32,7 @@ RATING_FIELD = "rating"
 LABEL_FIELD = "label"
 POS_ITEM_FIELD = "pos_item_id"
 NEG_ITEM_FIELD = "neg_item_id"
+FEATURE_NAME = ["actor", "country", "director", "genre"]
 FEATURE_FIELD = ["actorID", "country", "directorID", "genre"]
 FEATURE_IDX_FIELD = ["actorID_idx", "country_idx", "directorID_idx", "genre_idx"]
 IS_LIST_FEATURES = [True, False, False, True]
@@ -256,3 +257,64 @@ class ExperimentDataPreprocessor:
         print(f"Item Pool: {n_items}, negative sampled to {K} items for each user")
         print(f"Num of interactions: {n_users}(users) * {K}(items) = {len(prediction_df)}")
         return prediction_df
+
+    # NOTE: User-Item-Attributes Knowledge Graph Construction
+    def create_knowledge_graph(self, df_split: pd.DataFrame, vocab2idx: Dict[int, int]) -> HeteroData:
+        """
+        Create a user-item interaction graph from the DataFrame.
+        Args:
+            df_split (pd.DataFrame): The input DataFrame containing user-item interactions.
+        Returns:
+            HeteroData: A PyTorch Geometric HeteroData object representing the user-item interaction graph with attributes.
+        """
+        print("Creating interaction graph...")
+        print("Drop negative samples")
+        print("  Num of all interactions:", len(df_split))
+        df_split = df_split.loc[df_split["label"] == 1, :]
+        print("  Num of positive interactions:", len(df_split), "\n")
+
+        hetero_data = HeteroData()
+        # NOTE: Building Nodes
+        hetero_data["user"].num_nodes = len(vocab2idx[USER_ID_FIELD])
+        hetero_data["movie"].num_nodes = len(vocab2idx[ITEM_ID_FIELD])
+        for feature_name, feature_field in zip(FEATURE_NAME, FEATURE_FIELD):
+            hetero_data[feature_name].num_nodes = len(vocab2idx[feature_field])
+
+        # NOTE: Building Edges
+        print("Building user-item edges...")
+        ui_edge_index = torch.from_numpy(
+            np.array([df_split[USER_ID_FIELD].values, df_split[ITEM_ID_FIELD].values])
+        )
+        hetero_data["user", "interacts_with", "movie"].edge_index = ui_edge_index
+        hetero_data["movie", "interacts_with", "user"].edge_index = torch.flip(ui_edge_index, dims=[0])
+
+        print("Building item-attribute edges...")
+
+        def _get_attribute_edges(df: pd.DataFrame, attr_col: str, is_list: bool) -> torch.Tensor:
+            attr_df = df.drop_duplicates([ITEM_ID_FIELD])[[ITEM_ID_FIELD, attr_col]].copy()
+            if is_list:
+                src, dst = [], []
+                for _, row in attr_df.iterrows():
+                    item_id = row[ITEM_ID_FIELD]
+                    for attr in row[attr_col]:
+                        src.append(item_id)
+                        dst.append(attr)
+                edge_index = torch.tensor([src, dst], dtype=torch.long)
+            else:
+                edge_index = torch.from_numpy(
+                    np.array([attr_df[ITEM_ID_FIELD].values, attr_df[attr_col].values])
+                )
+            return edge_index
+
+        for feature_name, feature_idx, is_list in zip(FEATURE_NAME, FEATURE_IDX_FIELD, IS_LIST_FEATURES):
+            edge_index = _get_attribute_edges(df_split, feature_idx, is_list)
+            hetero_data["movie", f"has_{feature_name}", feature_name].edge_index = edge_index
+            hetero_data[feature_name, f"is_{feature_name}_of", "movie"].edge_index = torch.flip(
+                edge_index, dims=[0]
+            )
+
+        print("Knowledge Graph:", hetero_data)
+        print("Node Type:", hetero_data.node_types)
+        print("Edge Type:", hetero_data.edge_types)
+
+        return hetero_data

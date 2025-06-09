@@ -18,13 +18,8 @@ class KGATRec(LightningModule):
     def __init__(
         self,
         hetero_data,
-        num_users,
-        num_items,
-        num_nodes_dict,
         embedding_dim=64,
         num_layers=3,
-        node_dropout=0.0,
-        mess_dropout=0.1,
         lr=1e-3,
         reg_weight=1e-5,
     ):
@@ -33,13 +28,10 @@ class KGATRec(LightningModule):
 
         self.hetero_data = hetero_data
 
-        self.num_users = num_users
-        self.num_items = num_items
-        self.num_nodes_dict = {k: v + 1 for k, v in num_nodes_dict.items()}  # +1 for OOV
+        self.num_users = hetero_data["user"].num_nodes
+        self.num_items = hetero_data["movie"].num_nodes
         self.embedding_dim = embedding_dim
         self.num_layers = num_layers
-        self.node_dropout = node_dropout
-        self.mess_dropout = mess_dropout
 
         self.lr = lr
         self.reg_weight = reg_weight
@@ -56,10 +48,10 @@ class KGATRec(LightningModule):
 
         self.kgat_model = KGAT(
             hetero_data=self.hetero_data,
-            num_nodes_dict=self.num_nodes_dict,
             embed_dim=self.embedding_dim,
             num_layers=self.num_layers,
             aggr="bi-interaction",  # Use bi-interaction aggregation
+            device=self.device,
         )
 
         # NOTE: Main loss functions for recommendation
@@ -96,7 +88,7 @@ class KGATRec(LightningModule):
         )
 
         # NOTE: Calculate KG loss for embedding regularization (TransR)
-        kg_loss = self.calc_kg_loss(self, user_emb, item_emb, user, pos_item, neg_item)
+        kg_loss = self.calc_kg_loss(user_emb, item_emb, user, pos_item, neg_item)
         self.log("train_kg_loss", kg_loss, on_step=True)
 
         return bpr_loss + kg_loss
@@ -105,10 +97,11 @@ class KGATRec(LightningModule):
         """Only calculate Pairwise TransR Loss for User-Item Triplets"""
         r_emb_ui = self.kgat_model.r_embs["interacts_with"]
         trans_r_ui = self.kgat_model.trans_m["interacts_with"]
+        emb_dim = r_emb_ui.size(0)
 
-        emb_u = trans_r_ui(user_emb[user_idx])
-        emb_i = trans_r_ui(item_emb[pos_t])
-        emb_neg_i = trans_r_ui(item_emb[neg_t])
+        emb_u = trans_r_ui(user_emb[user_idx].reshape(-1, emb_dim))
+        emb_i = trans_r_ui(item_emb[pos_t].reshape(-1, emb_dim))
+        emb_neg_i = trans_r_ui(item_emb[neg_t].reshape(-1, emb_dim))
 
         pos_score = torch.norm(emb_u + r_emb_ui - emb_i, p=2)
         neg_score = torch.norm(emb_u + r_emb_ui - emb_neg_i, p=2)
