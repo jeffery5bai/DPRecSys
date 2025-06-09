@@ -1,109 +1,171 @@
-"""
-KGCN (Knowledge Graph Convolutional Network) Module in PyTorch Geometric
-Wang, Hongwei, et al. "Knowledge graph convolutional networks for recommender systems."
-The world wide web conference. 2019.
-"""
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch_geometric.data import HeteroData
+
+
+class KGCN(nn.Module):
+    def __init__(self, args, num_users: int, num_items: int, hetero_data: HeteroData):
+        super(KGCN, self).__init__()
+        self.parse_args(args)
+        self.data = hetero_data
+        self.num_users = num_users + 1  # +1 for OOV user
+        self.num_items = num_items + 1  # +1 for OOV item
+
+        self.user_emb_matrix = nn.Embedding(self.num_users, self.dim)
+        self.item_emb_matrix = nn.Embedding(self.num_items, self.dim)
+        self.entity_emb_matrix = nn.Embedding(self.data["item"].num_nodes, self.dim)
+
+        self.relation_emb_matrix = nn.Embedding(len(self.data.edge_types), self.dim)
+
+        nn.init.xavier_uniform_(self.user_emb_matrix.weight)
+        nn.init.xavier_uniform_(self.entity_emb_matrix.weight)
+        nn.init.xavier_uniform_(self.relation_emb_matrix.weight)
+
+        # Aggregator class
+        self.aggregator_class = SumAggregator
+
+    def parse_args(self, args):
+        self.n_iter = args.n_iter
+        self.batch_size = args.batch_size
+        self.dim = args.dim
+        self.l2_weight = args.l2_weight
+        self.lr = args.lr
+        self.neighbor_sample_size = args.neighbor_sample_size
+
+    def forward(self, user_indices, item_indices):
+        """
+        user_indices: [batch_size]
+        item_indices: [batch_size]
+        """
+        user_emb = self.user_emb_matrix(user_indices)
+        item_vu_emb = self.aggregate(user_emb, item_indices)
+
+        scores = torch.sum(user_emb * item_vu_emb, dim=1)
+        return scores, torch.sigmoid(scores)
+
+    def aggregate(self, user_emb, item_indices):
+        """
+        Multi-hop aggregation from HeteroData graph.
+        item_indices: [batch_size]
+        """
+        entity_vectors = [self.item_emb_matrix(item_indices)]
+
+        for i in range(self.n_iter):
+            neighbors = self.sample_neighbors(item_indices)
+            neighbor_items, edge_types = neighbors
+
+            neighbor_embs = self.entity_emb_matrix(neighbor_items)
+            rel_embs = self.relation_emb_matrix(edge_types)
+
+            aggregator = self.aggregator_class(
+                batch_size=self.batch_size,
+                dim=self.dim,
+                activation=torch.tanh if i == self.n_iter - 1 else None
+            )
+
+            out = aggregator(
+                self_vectors=entity_vectors[-1],
+                neighbor_vectors=neighbor_embs,
+                neighbor_relations=rel_embs,
+                user_embeddings=user_emb
+            )
+            entity_vectors.append(out)
+
+        return entity_vectors[-1]
+
+    def sample_neighbors(self, item_indices):
+        """
+        Samples 1-hop neighbors using HeteroData.edge_index.
+        Returns: neighbor_item_indices, relation_types
+        """
+        all_neighbors = []
+        all_relations = []
+
+        for i, edge_type in enumerate(self.data.edge_types):
+            src, dst = self.data[edge_type[1]].edge_index
+
+            mask = torch.isin(src, item_indices)
+            sampled_dst = dst[mask]
+            sampled_src = src[mask]
+
+            if sampled_dst.numel() == 0:
+                continue
+
+            # NOTE: sample neighbors from attributes to items
+            # TODO: we skipped the entity sampling strategy here since movielens dataset has few attributes
+
+            all_neighbors.append(sampled_dst)
+            all_relations.append(torch.full_like(sampled_dst, fill_value=i))
+
+        if len(all_neighbors) == 0:
+            return item_indices, torch.zeros_like(item_indices)
+
+        return torch.cat(all_neighbors), torch.cat(all_relations)
+
+    def compute_loss(self, scores, labels):
+        bce = F.binary_cross_entropy_with_logits(scores, labels)
+
+        l2_loss = self.user_emb_matrix.weight.norm(2) + self.entity_emb_matrix.weight.norm(2) + self.relation_emb_matrix.weight.norm(2)
+        return bce + self.l2_weight * l2_loss
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch_geometric.data import Data, HeteroData
-from torch_geometric.nn import HeteroConv, MessagePassing
 
 
-class KGCN(nn.Module):
-    def __init__(
-        self,
-        num_users,
-        num_items,
-        attr_dims,
-        embedding_dim,
-        train_graph: Data,
-        hetero_data: HeteroData,
-        num_layers: int = 1,
-    ):
-        super().__init__()
-        self.num_users = num_users + 1  # +1 for OOV user
-        self.num_items = num_items + 1  # +1 for OOV item
-        self.embedding_dim = embedding_dim
-        self.num_layers = num_layers
-        self.edge_index_ui = train_graph.edge_index
-        self.hetero_data = hetero_data
-
-        # Initialize user, item, attribute and relation embeddings
-        self.user_embedding = nn.Embedding(self.num_users, embedding_dim)
-        self.item_embedding = nn.Embedding(self.num_items, embedding_dim)
-        nn.init.xavier_uniform_(self.user_embedding.weight)
-        nn.init.xavier_uniform_(self.item_embedding.weight)
-        self.attr_embeddings = nn.ParameterDict(
-            {attr: nn.Parameter(torch.randn(size, embedding_dim)) for attr, size in attr_dims.items()}
-        )
-        self.rel_embeddings = nn.ParameterDict(
-            {rel_type[1]: nn.Parameter(torch.randn(1, embedding_dim)) for rel_type in hetero_data.edge_types}
-        )
-
-        # Initialize the KGCN layers
-        self.kg_convs = nn.ModuleList(
-            [
-                HeteroConv(
-                    {edge_type[1]: KGConv(embedding_dim) for edge_type in hetero_data.edge_types}, aggr="mean"
-                )
-                for _ in range(num_layers)
-            ]
-        )
-
-    def forward(self):
-        x_user = self.user_embedding
-        x_item = self.item_embedding
-
-        for layer in self.kg_convs:
-            out_dict = {}
-            for edge_type in self.hetero_data.edge_types:
-                src_type, rel_name, dst_type = edge_type
-                edge_index = self.hetero_data[edge_type].edge_index
-
-                # NOTE: we only propagate from attributes to movie
-                # movie nodes are always the target (dst_type)
-                x_src = self.attr_embeddings[src_type][edge_index[0]]
-                x_dst = x_item[edge_index[1]]
-                rel = self.rel_embeddings[rel_name]
-
-                # NOTE: To get Vu: user embeddings for the interacted source (movie) nodes
-                user_interacted_src = self.edge_index_ui[0][
-                    self.edge_index_ui[1] == edge_index[1].unsqueeze(-1)
-                ].squeeze(-1)
-                user_emb = x_user[user_interacted_src]
-
-                out_dict[rel_name] = layer.convs[rel_name](
-                    x_src, x_dst, rel=rel, user_emb=user_emb, index=edge_index
-                )
-
-            updated = layer(out_dict, self.hetero_data.edge_index_dict)
-
-            for node_type, x_updated in updated.items():
-                if node_type == "movie":
-                    x_item = x_updated
-                elif node_type in self.attr_embeddings:
-                    self.attr_embeddings[node_type] = x_updated
-
-        self.user_embedding = x_user
-        self.item_embedding = x_item
-
-        return x_user, x_item
-
-
-class KGConv(MessagePassing):
-    def __init__(self, dim):
-        super().__init__(aggr="add", flow="source_to_target")
+class SumAggregator(nn.Module):
+    def __init__(self, batch_size, dim, dropout=0.0, activation=F.relu):
+        super(SumAggregator, self).__init__()
+        self.batch_size = batch_size
         self.dim = dim
-        self.linear = nn.Linear(dim, dim)
+        self.dropout = nn.Dropout(p=dropout)
+        self.activation = activation
 
-    def forward(self, x_i, x_j, rel, user_emb, index):
-        user_emb = user_emb[index[0]]  # Get corresponding users who interacted with source nodes
-        user_emb = user_emb.view(-1, 1, 1, self.dim)  # [E,1,1,D]
-        rel = rel.view(-1, 1, self.dim)  # [E,1,D] for broadcasting
-        score = (user_emb * rel).sum(dim=-1)  # [E,1]
-        score = F.softmax(score, dim=0)  # normalize per edge
-        x_j = x_j.view(-1, 1, self.dim)  # [E,1,D]
-        agg = (score.unsqueeze(-1) * x_j).sum(dim=0)  # [1,D]
-        return F.relu(self.linear(x_i + agg))
+        self.linear = nn.Linear(dim, dim)  # PyTorch uses bias=True by default
+
+    def forward(self, self_vectors, neighbor_vectors, neighbor_relations, user_embeddings):
+        """
+        self_vectors: Tensor [batch_size, dim]
+        neighbor_vectors: Tensor [batch_size * n_sample, dim]
+        neighbor_relations: Tensor [batch_size * n_sample, dim]
+        user_embeddings: Tensor [batch_size, dim]
+        """
+
+        neighbors_agg = self.mix_neighbor_vectors(neighbor_vectors, neighbor_relations, user_embeddings)
+
+        # Sum self vector and neighbor aggregation
+        output = self_vectors + neighbors_agg  # shape: [batch_size, dim]
+
+        output = self.dropout(output)
+        output = self.linear(output)  # shape: [batch_size, dim]
+
+        return self.activation(output)
+
+    def mix_neighbor_vectors(self, neighbor_vectors, neighbor_relations, user_embeddings):
+        """
+        Perform relation-aware attention-based mixing for neighbors.
+
+        neighbor_vectors: [batch_size * n_sample, dim]
+        neighbor_relations: [batch_size * n_sample, dim]
+        user_embeddings: [batch_size, dim]
+        """
+
+        # Reshape: [batch_size, n_sample, dim]
+        n_sample = neighbor_vectors.shape[0] // self.batch_size
+        neighbor_vectors = neighbor_vectors.view(self.batch_size, n_sample, self.dim)
+        neighbor_relations = neighbor_relations.view(self.batch_size, n_sample, self.dim)
+
+        # [batch_size, 1, dim] → broadcasted
+        user_embeddings = user_embeddings.unsqueeze(1)
+
+        # Relation-aware attention score (dot product between (u ◦ r) and v)
+        # where ◦ is element-wise product, v is neighbor vector
+        scores = torch.sum((user_embeddings * neighbor_relations) * neighbor_vectors, dim=2)  # [batch_size, n_sample]
+
+        attention = F.softmax(scores, dim=1)  # [batch_size, n_sample]
+        attention = attention.unsqueeze(2)  # [batch_size, n_sample, 1]
+
+        # Weighted sum of neighbor vectors
+        neighbors_agg = torch.sum(attention * neighbor_vectors, dim=1)  # [batch_size, dim]
+        return neighbors_agg
