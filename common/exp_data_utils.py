@@ -309,7 +309,7 @@ class ExperimentDataPreprocessor:
         for feature_name, feature_idx, is_list in zip(FEATURE_NAME, FEATURE_IDX_FIELD, IS_LIST_FEATURES):
             edge_index = _get_attribute_edges(df_split, feature_idx, is_list)
             hetero_data["movie", f"has_{feature_name}", feature_name].edge_index = edge_index
-            hetero_data[feature_name, f"is_{feature_name}_of", "movie"].edge_index = torch.flip(
+            hetero_data[feature_name, f"has_{feature_name}", "movie"].edge_index = torch.flip(
                 edge_index, dims=[0]
             )
 

@@ -55,7 +55,7 @@ class KGAT(nn.Module):
         self.linear_bi = nn.Linear(embed_dim, embed_dim) if aggr == "bi-interaction" else None
         self.leaky_relu = nn.LeakyReLU(negative_slope=0.2)
 
-    def forward(self, hetero_graph, training=False):
+    def forward(self, hetero_graph):
         """Forward pass through the KGAT model. return Dict[node_type: embeddings]"""
         device = next(self.parameters()).device
         x_dict = {k: v.weight.to(device) for k, v in self.embeddings.items()}
@@ -136,4 +136,4 @@ class KGATConv(MessagePassing):
         return t * attn.unsqueeze(-1)
 
     def update(self, aggr_out):
-        return aggr_out
+        return F.normalize(aggr_out, p=2, dim=1)
