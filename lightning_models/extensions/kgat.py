@@ -5,9 +5,16 @@ sys.path.append(os.path.abspath(os.path.join(os.getcwd(), "../..")))
 
 import torch
 from common.eval import Evaluator
+from common.utils import seed_worker
 from modules.kgat_modules import KGAT
 from modules.loss import BPRLoss, EmbLoss
 from pytorch_lightning import LightningModule
+from torch_geometric.loader import NeighborLoader
+
+# NOTE: To handle random seed for NeighborLoader
+RANDOM_SEED = 42
+g = torch.Generator()
+g.manual_seed(RANDOM_SEED)
 
 
 class KGATRec(LightningModule):
@@ -20,6 +27,7 @@ class KGATRec(LightningModule):
         hetero_data,
         embedding_dim=64,
         num_layers=3,
+        num_neighbors=-1,  # -1 means all neighbors
         lr=1e-3,
         reg_weight=1e-5,
     ):
@@ -32,6 +40,7 @@ class KGATRec(LightningModule):
         self.num_items = hetero_data["movie"].num_nodes
         self.embedding_dim = embedding_dim
         self.num_layers = num_layers
+        self.num_neighbors = num_neighbors
 
         self.lr = lr
         self.reg_weight = reg_weight
@@ -65,11 +74,17 @@ class KGATRec(LightningModule):
         return (user_emb[user_idx] * item_emb[item_idx]).sum(dim=1)
 
     def training_step(self, batch, batch_idx):
-        emb_dict = self.kgat_model()  # Compute embedding for training
+        user, pos_item, neg_item = batch["user"], batch["pos_item"], batch["neg_item"]
+
+        # NOTE: Build mini-batch subgraph (centered to "user")
+        # TODO: turn this on to use mini-batch subgraph, and change the forward function accordingly
+        # input_nodes = ("user", user)
+        # subgraph = self.get_subgraph(input_nodes)
+
+        emb_dict = self.kgat_model(self.hetero_data)  # Compute embedding for training
         user_emb = emb_dict["user"]
         item_emb = emb_dict["movie"]
 
-        user, pos_item, neg_item = batch["user"], batch["pos_item"], batch["neg_item"]
         yp_scores = self.forward(user_emb, item_emb, user, pos_item)
         yn_scores = self.forward(user_emb, item_emb, user, neg_item)
 
@@ -93,6 +108,38 @@ class KGATRec(LightningModule):
 
         return bpr_loss + kg_loss
 
+    def get_subgraph(self, input_nodes):
+        """Get subgraph for the given input nodes."""
+        loader = NeighborLoader(
+            self.hetero_data,
+            num_neighbors=[self.num_neighbors] * self.num_layers,
+            input_nodes=input_nodes,
+            batch_size=len(set(input_nodes[1])),
+            shuffle=False,
+            directed=True,
+            worker_init_fn=seed_worker,
+            generator=g,
+            num_workers=4,
+        )
+        subgraph = next(iter(loader))
+
+        # NOTE: Map local IDs back to global for each edge_index
+        for edge_type in subgraph.edge_types:
+            src_type, rel_type, dst_type = edge_type
+            src_global_ids, src_num_nodes = subgraph[src_type].n_id, subgraph[src_type].num_nodes
+            dst_global_ids, dst_num_nodes = subgraph[dst_type].n_id, subgraph[dst_type].num_nodes
+            src_map = {i: src_global_ids[i] for i in range(src_num_nodes)}
+            dst_map = {i: dst_global_ids[i] for i in range(dst_num_nodes)}
+
+            src_edge_local = subgraph.edge_index_dict[edge_type][0]
+            dst_edge_local = subgraph.edge_index_dict[edge_type][1]
+
+            src_edge_global = torch.tensor([src_map[i.item()] for i in src_edge_local], dtype=torch.long)
+            dst_edge_global = torch.tensor([dst_map[i.item()] for i in dst_edge_local], dtype=torch.long)
+            subgraph[edge_type].edge_index = torch.stack([src_edge_global, dst_edge_global], dim=0)
+
+        return subgraph
+
     def calc_kg_loss(self, user_emb, item_emb, user_idx, pos_t, neg_t):
         """Only calculate Pairwise TransR Loss for User-Item Triplets"""
         r_emb_ui = self.kgat_model.r_embs["interacts_with"]
@@ -111,7 +158,7 @@ class KGATRec(LightningModule):
 
     # NOTE: Validation
     def on_validation_epoch_start(self):
-        emb_dict = self.kgat_model()  # Compute embedding once for val phase
+        emb_dict = self.kgat_model(self.hetero_data)  # Compute embedding once for val phase
         self.user_emb = emb_dict["user"]
         self.item_emb = emb_dict["movie"]
 
@@ -156,7 +203,7 @@ class KGATRec(LightningModule):
 
     # NOTE: Testing/Inference
     def on_test_epoch_start(self):
-        emb_dict = self.kgat_model()
+        emb_dict = self.kgat_model(self.hetero_data)
         self.user_emb = emb_dict["user"]
         self.item_emb = emb_dict["movie"]
 

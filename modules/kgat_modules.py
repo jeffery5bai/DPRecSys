@@ -55,12 +55,11 @@ class KGAT(nn.Module):
         self.linear_bi = nn.Linear(embed_dim, embed_dim) if aggr == "bi-interaction" else None
         self.leaky_relu = nn.LeakyReLU(negative_slope=0.2)
 
-    def forward(self):
+    def forward(self, hetero_graph, training=False):
         """Forward pass through the KGAT model. return Dict[node_type: embeddings]"""
         device = next(self.parameters()).device
         x_dict = {k: v.weight.to(device) for k, v in self.embeddings.items()}
-        edge_index_dict = {k: v.to(device) for k, v in self.hetero_data.edge_index_dict.items()}
-        # edge_index_dict = self.hetero_data.edge_index_dict
+        edge_index_dict = {k: v.to(device) for k, v in hetero_graph.edge_index_dict.items()}
         all_embeddings = [x_dict]
 
         # 4. Multi-layer propagation
@@ -75,8 +74,10 @@ class KGAT(nn.Module):
         # 5. Concatenate embeddings from all layers
         final_emb_dict = {}
         for node_type in x_dict:
-            final_emb_dict[node_type] = torch.cat([emb_dict[node_type] for emb_dict in all_embeddings], dim=-1)
-        
+            final_emb_dict[node_type] = torch.cat(
+                [emb_dict[node_type] for emb_dict in all_embeddings], dim=-1
+            )
+
         return final_emb_dict  # final embeddings per node type
 
     def aggregate(self, v_dict, v_neighbor_dict, aggr="bi-interaction"):
@@ -127,7 +128,7 @@ class KGATConv(MessagePassing):
     def message(self, x_i, x_j, r_emb, trans_r, edge_index):
         # by PyG default, x_i is the center node (target), and x_j are its neighbors (source)
         h = trans_r(x_j)
-        t = trans_r(x_i) 
+        t = trans_r(x_i)
         r = r_emb
 
         score = (t * torch.tanh(h + r)).sum(dim=-1)  # [num_edges]
