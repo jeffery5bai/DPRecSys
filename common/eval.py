@@ -8,7 +8,9 @@ from typing import Any, Dict, List, Set, Tuple, Union
 import numpy as np
 import pandas as pd
 import torch
+from common.utils import DataPreprocessor, FeatureEngineer
 from pytorch_lightning import seed_everything
+from sklearn.metrics.pairwise import cosine_similarity
 from torch_geometric.data import Data
 from tqdm import tqdm
 
@@ -230,3 +232,70 @@ class Evaluator:
         """
         hit_set = set(rec_items[:k]) & set(gt_items)
         return len(hit_set) / k
+
+    def evaluate_dpms_at_k(
+        self,
+        eval_df: pd.DataFrame,
+        feature_engineer: FeatureEngineer,
+        ground_truth_dps_df: pd.DataFrame,
+        k: int = 5,
+        actor_k: int = 5,
+        rare_threshold: int = 5,
+    ) -> pd.DataFrame:
+        """
+        Evaluate the diversity preference matching score (DPMS) at K.
+        eval_df: DataFrame with columns ["user", "rec_items", "gt_items"].
+        """
+        # NOTE: Explode items and slice to top K
+        df = eval_df.copy()
+        df["topk_items"] = df["rec_items"].apply(lambda x: x[:k])
+        exploded = df.explode("topk_items")
+        exploded = exploded.rename(columns={"user": "userID", "topk_items": "movieID"})
+        exploded["movieID"] = exploded["movieID"].astype(int)
+
+        print("exploded", exploded["userID"].nunique())
+        # NOTE: Join item info
+        exploded = DataPreprocessor().join_item_features(
+            exploded,
+            actor_k=actor_k,
+            threshold=rare_threshold,
+        )
+
+        # NOTE: Encode features
+        encoded_df = feature_engineer.transform(exploded)
+
+        print("encoded", encoded_df["userID"].nunique())
+
+        # NOTE: Calculate Prediction DP vectors for each user
+        encoded_df["rating"] = 1.0  # Set a dummy rating for the purpose of DPS calculation
+        pred_user_dps_df = self.eval_user_diversity_preference_scale(
+            df_with_encoded_features=encoded_df, feature_vocab2idx=feature_engineer.vocab2idx, normalized=True
+        )
+        pred_user_dps_df = pred_user_dps_df.rename(
+            columns={f"{feat}_wvec": f"{feat}_pred" for feat in FEATURE_FIELD},
+        )
+        pred_user_dps_df = pred_user_dps_df[[USER_ID_FIELD] + [f"{feat}_pred" for feat in FEATURE_FIELD]]
+
+        # NOTE: Join pred and ground truth DP vectors
+        ground_truth_dps_df = ground_truth_dps_df.rename(
+            columns={f"{feat}_wvec": f"{feat}_gt" for feat in FEATURE_FIELD},
+        )
+        ground_truth_dps_df = ground_truth_dps_df[[USER_ID_FIELD] + [f"{feat}_gt" for feat in FEATURE_FIELD]]
+
+        combined_df = pred_user_dps_df.merge(
+            ground_truth_dps_df,
+            on=USER_ID_FIELD,
+            how="inner",
+        )
+
+        print("combined_df", combined_df["userID"].nunique())
+
+        # NOTE: Calculate DPMS
+        print("Calculating DPMS for each feature...")
+        for feat in FEATURE_FIELD:
+            combined_df[f"{feat}_dpms"] = cosine_similarity(
+                np.stack(combined_df[f"{feat}_pred"].values), np.stack(combined_df[f"{feat}_gt"].values)
+            ).diagonal()
+        combined_df["avg_dpms"] = combined_df[[f"{feat}_dpms" for feat in FEATURE_FIELD]].mean(axis=1)
+
+        return combined_df[[USER_ID_FIELD] + [f"{feat}_dpms" for feat in FEATURE_FIELD] + ["avg_dpms"]]
