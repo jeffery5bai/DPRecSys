@@ -39,6 +39,7 @@ def get_callbacks(
     exp_name: str = "",
     monitor_metric: str = "val_ndcg10",
     monitor_mode: str = "max",
+    min_delta: float = 0.0,
 ) -> List[Callback]:
     """
     Set up callbacks for PyTorch Lightning.
@@ -64,7 +65,7 @@ def get_callbacks(
     )
 
     # Define the early stopping callback
-    early_stopping = EarlyStopping(monitor=monitor_metric, patience=patience, mode=monitor_mode, verbose=True)
+    early_stopping = EarlyStopping(monitor=monitor_metric, patience=patience, mode=monitor_mode, min_delta=min_delta, verbose=True)
 
     # Define the timer callback
     timer = Timer()

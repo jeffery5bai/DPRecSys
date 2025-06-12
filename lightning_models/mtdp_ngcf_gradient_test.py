@@ -168,20 +168,9 @@ class MTDPRecSRM_G(NGCFRec):
 
         return total_loss
 
-    def get_flat_grads_v1(self, loss):
-        self.zero_grad(set_to_none=True)  # Clear before analysis
-        loss.backward(retain_graph=True)  # Compute grads for analysis only
-        grads = []
-        for p in self.parameters():
-            if p.grad is not None:
-                grads.append(p.grad.detach().flatten())
-        flat_grad = torch.cat(grads)
-        self.zero_grad(set_to_none=True)  # Clear again before real training step
-        return flat_grad
-
     def get_flat_grads(self, loss):
         self.zero_grad(set_to_none=True)  # Clear existing gradients.
-        loss.backward(retain_graph=True)
+        loss.backward(retain_graph=True) # Compute grads for analysis only
         grads = []
         for p in self.parameters():
             # If a parameter did not contribute to the loss, substitute with zeros.

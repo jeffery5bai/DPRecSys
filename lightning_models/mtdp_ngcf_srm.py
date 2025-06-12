@@ -98,7 +98,7 @@ class MTDPRecSRM(NGCFRec):
         bpr_loss = pair_loss + self.reg_weight * reg_loss
         self.log_dict(
             {
-                "train_bpr_loss": bpr_loss,
+                "train_bpr_loss": self.mt_weights["rec_loss"] * bpr_loss,
                 "train_pair_loss": pair_loss,
                 "train_reg_loss": self.reg_weight * reg_loss,
             },
@@ -111,21 +111,21 @@ class MTDPRecSRM(NGCFRec):
         unique_dps_label = {k: v[first_indices] for k, v in dps_label.items()}
         dps_scores = self.dps_module(user_emb, unique_users)
         dps_loss = self.dps_loss_fn(dps_scores, unique_dps_label)
-        self.log_dict({"train_dps_loss": dps_loss}, on_epoch=True, on_step=True)
+        self.log_dict({"train_dps_loss": self.mt_weights["dps_loss"] * dps_loss}, on_epoch=True, on_step=True)
 
         # NOTE: Auxiliary task 2 - Diversity Preference Regularization (DPR)
         unique_users, first_indices = self._get_first_occurrence_indices(user)
         unique_dps_label = {k: v[first_indices] for k, v in dps_label.items()}
         dpr_scores = self.dpr_module(user_emb, user, item_emb, pos_item)
         dpr_loss = self.dpr_loss_fn(dpr_scores, unique_dps_label)
-        self.log_dict({"train_dpr_loss": dpr_loss}, on_epoch=True, on_step=True)
+        self.log_dict({"train_dpr_loss": self.mt_weights["dpr_loss"] * dpr_loss}, on_epoch=True, on_step=True)
 
         # NOTE: Auxiliary task 3 - Diversity Preference Matching (DPM)
         unique_users, first_indices = self._get_first_occurrence_indices(user)
         unique_dpm_label = {k: v[first_indices] for k, v in dpm_label.items()}
         dpm_prob_dist = self.dpm_module(yp_scores, user, dpm_vec)
         dpm_loss = self.dpm_loss_fn(dpm_prob_dist, unique_dpm_label)
-        self.log_dict({"train_dpm_loss": dpm_loss}, on_epoch=True, on_step=True)
+        self.log_dict({"train_dpm_loss": self.mt_weights["dpm_loss"] * dpm_loss}, on_epoch=True, on_step=True)
 
         # TODO: weighing the main task and auxiliary task losses
         total_loss = (
