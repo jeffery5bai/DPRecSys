@@ -1,6 +1,6 @@
 # setup MLflow logger and callbacks
 import os
-from typing import List
+from typing import List, Dict
 
 from dotenv import load_dotenv
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint, Timer
@@ -11,7 +11,7 @@ load_dotenv(dotenv_path="../.env")
 MLFLOW_SERVICE_URI = os.getenv("MLFLOW_SERVICE_URI", "")
 
 
-def get_mlflow_logger(experiment_name: str, run_name: str) -> MLFlowLogger:
+def get_mlflow_logger(experiment_name: str, run_name: str, tags: Dict[str, str] = None) -> MLFlowLogger:
     """
     Set up MLflow logger for PyTorch Lightning.
     Args:
@@ -20,11 +20,16 @@ def get_mlflow_logger(experiment_name: str, run_name: str) -> MLFlowLogger:
     Returns:
         MLFlowLogger: Configured MLflow logger.
     """
-    return MLFlowLogger(
+    logger = MLFlowLogger(
         experiment_name=experiment_name,
         run_name=run_name,
         tracking_uri=MLFLOW_SERVICE_URI,  # can also use http://... for remote
     )
+
+    if tags is not None:
+        for key, value in tags.items():
+            logger.experiment.set_tag(logger.run_id, key, value)
+    return logger
 
 
 def get_callbacks(

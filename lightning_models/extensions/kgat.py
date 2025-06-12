@@ -30,6 +30,7 @@ class KGATRec(LightningModule):
         num_neighbors=-1,  # -1 means all neighbors
         lr=1e-3,
         reg_weight=1e-5,
+        use_mini_batch=False,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -41,6 +42,7 @@ class KGATRec(LightningModule):
         self.embedding_dim = embedding_dim
         self.num_layers = num_layers
         self.num_neighbors = num_neighbors
+        self.use_mini_batch = use_mini_batch
 
         self.lr = lr
         self.reg_weight = reg_weight
@@ -77,11 +79,13 @@ class KGATRec(LightningModule):
         user, pos_item, neg_item = batch["user"], batch["pos_item"], batch["neg_item"]
 
         # NOTE: Build mini-batch subgraph (centered to "user")
-        # TODO: turn this on to use mini-batch subgraph, and change the forward function accordingly
-        # input_nodes = ("user", user)
-        # subgraph = self.get_subgraph(input_nodes)
+        if self.use_mini_batch:
+            input_nodes = ("user", user)
+            subgraph = self.get_subgraph(input_nodes)
+            emb_dict = self.kgat_model(subgraph)
+        else:
+            emb_dict = self.kgat_model(self.hetero_data)  # Compute embedding for training
 
-        emb_dict = self.kgat_model(self.hetero_data)  # Compute embedding for training
         user_emb = emb_dict["user"]
         item_emb = emb_dict["movie"]
 
