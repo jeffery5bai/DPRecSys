@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from common.init import kaiming_uniform_initialization, xavier_uniform_initialization
 from torch_geometric.nn import HeteroConv, MessagePassing
 from torch_geometric.utils import softmax
 
@@ -24,8 +25,6 @@ class KGAT(nn.Module):
         self.r_embs = nn.ParameterDict(
             {edge_type[1]: nn.Parameter(torch.Tensor(embed_dim)) for edge_type in self.hetero_data.edge_types}
         )
-        for param in self.r_embs.values():
-            nn.init.xavier_uniform_(param.data.unsqueeze(0)).squeeze(0)
 
         self.trans_m = nn.ModuleDict(
             {
@@ -33,6 +32,10 @@ class KGAT(nn.Module):
                 for edge_type in self.hetero_data.edge_types
             }
         )
+
+        xavier_uniform_initialization(self.embeddings)
+        xavier_uniform_initialization(self.r_embs)
+        xavier_uniform_initialization(self.trans_m)
 
         self.rel_params = RelationParams(self.r_embs, self.trans_m)
 
@@ -54,6 +57,9 @@ class KGAT(nn.Module):
         )
         self.linear_bi = nn.Linear(embed_dim, embed_dim) if aggr == "bi-interaction" else None
         self.leaky_relu = nn.LeakyReLU(negative_slope=0.2)
+        kaiming_uniform_initialization(self.linear, nonlinearity="leaky_relu", a=0.2)
+        if self.linear_bi is not None:
+            kaiming_uniform_initialization(self.linear_bi, nonlinearity="leaky_relu", a=0.2)
 
     def forward(self, hetero_graph):
         """Forward pass through the KGAT model. return Dict[node_type: embeddings]"""
