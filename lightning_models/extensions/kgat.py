@@ -26,6 +26,7 @@ class KGATRec(LightningModule):
         self,
         hetero_data,
         embedding_dim=64,
+        rel_emb_dim=8,
         num_layers=3,
         num_neighbors=-1,  # -1 means all neighbors
         lr=1e-3,
@@ -40,6 +41,7 @@ class KGATRec(LightningModule):
         self.num_users = hetero_data["user"].num_nodes
         self.num_items = hetero_data["movie"].num_nodes
         self.embedding_dim = embedding_dim
+        self.rel_emb_dim = rel_emb_dim
         self.num_layers = num_layers
         self.num_neighbors = num_neighbors
         self.use_mini_batch = use_mini_batch
@@ -60,6 +62,7 @@ class KGATRec(LightningModule):
         self.kgat_model = KGAT(
             hetero_data=self.hetero_data,
             embed_dim=self.embedding_dim,
+            rel_emb_dim=self.rel_emb_dim,
             num_layers=self.num_layers,
             aggr="bi-interaction",  # Use bi-interaction aggregation
             device=self.device,
@@ -148,7 +151,7 @@ class KGATRec(LightningModule):
         """Only calculate Pairwise TransR Loss for User-Item Triplets"""
         r_emb_ui = self.kgat_model.r_embs["interacts_with"]
         trans_r_ui = self.kgat_model.trans_m["interacts_with"]
-        emb_dim = r_emb_ui.size(0)
+        emb_dim = self.embedding_dim
 
         emb_u = trans_r_ui(user_emb[user_idx].reshape(-1, emb_dim))
         emb_i = trans_r_ui(item_emb[pos_t].reshape(-1, emb_dim))

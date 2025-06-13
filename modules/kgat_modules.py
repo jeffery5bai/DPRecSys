@@ -7,10 +7,13 @@ from torch_geometric.utils import softmax
 
 
 class KGAT(nn.Module):
-    def __init__(self, hetero_data, embed_dim, num_layers=3, aggr="bi-interaction", device="cuda"):
+    def __init__(
+        self, hetero_data, embed_dim, rel_emb_dim, num_layers=3, aggr="bi-interaction", device="cuda"
+    ):
         super().__init__()
         self.hetero_data = hetero_data
         self.embed_dim = embed_dim
+        self.rel_emb_dim = rel_emb_dim
         self.num_layers = num_layers
         self.aggr = aggr
         self.device = device
@@ -18,24 +21,28 @@ class KGAT(nn.Module):
         # 1. Initialize unified embedding table (no need to offset edges) and relations embeddings
         self.embeddings = nn.ModuleDict(
             {
-                node_type: nn.Embedding(hetero_data[node_type].num_nodes, embed_dim)
+                node_type: nn.Embedding(hetero_data[node_type].num_nodes, embed_dim, sparse=True)
                 for node_type in self.hetero_data.node_types
             }
         )
         self.r_embs = nn.ParameterDict(
-            {edge_type[1]: nn.Parameter(torch.Tensor(embed_dim)) for edge_type in self.hetero_data.edge_types}
-        )
-
-        self.trans_m = nn.ModuleDict(
             {
-                edge_type[1]: nn.Linear(embed_dim, embed_dim, bias=False)
+                edge_type[1]: nn.Parameter(torch.Tensor(rel_emb_dim))
                 for edge_type in self.hetero_data.edge_types
             }
         )
 
-        xavier_uniform_initialization(self.embeddings)
-        xavier_uniform_initialization(self.r_embs)
-        xavier_uniform_initialization(self.trans_m)
+        self.trans_m = nn.ModuleDict(
+            {
+                edge_type[1]: nn.Linear(embed_dim, rel_emb_dim, bias=False)
+                for edge_type in self.hetero_data.edge_types
+            }
+        )
+
+        xavier_uniform_initialization(self.r_embs)  # NOTE: must initialize relation embeddings (nn.Parameter)
+        # TODO: this initialization is not used in the original KGAT paper, but it can be useful (but not in my experiments)
+        # xavier_uniform_initialization(self.embeddings)
+        # xavier_uniform_initialization(self.trans_m)
 
         self.rel_params = RelationParams(self.r_embs, self.trans_m)
 
@@ -57,9 +64,11 @@ class KGAT(nn.Module):
         )
         self.linear_bi = nn.Linear(embed_dim, embed_dim) if aggr == "bi-interaction" else None
         self.leaky_relu = nn.LeakyReLU(negative_slope=0.2)
-        kaiming_uniform_initialization(self.linear, nonlinearity="leaky_relu", a=0.2)
-        if self.linear_bi is not None:
-            kaiming_uniform_initialization(self.linear_bi, nonlinearity="leaky_relu", a=0.2)
+
+        # TODO: this initialization is not used in the original KGAT paper, but it can be useful (but not in my experiments)
+        # kaiming_uniform_initialization(self.linear, nonlinearity="leaky_relu", a=0.2)
+        # if self.linear_bi is not None:
+        #     kaiming_uniform_initialization(self.linear_bi, nonlinearity="leaky_relu", a=0.2)
 
     def forward(self, hetero_graph):
         """Forward pass through the KGAT model. return Dict[node_type: embeddings]"""
@@ -139,7 +148,7 @@ class KGATConv(MessagePassing):
 
         score = (t * torch.tanh(h + r)).sum(dim=-1)  # [num_edges]
         attn = softmax(score, edge_index[1])  # softmax over neighbors of source
-        return t * attn.unsqueeze(-1)
+        return x_j * attn.unsqueeze(-1)
 
     def update(self, aggr_out):
         return F.normalize(aggr_out, p=2, dim=1)

@@ -1,3 +1,6 @@
+import math
+
+import torch
 import torch.nn as nn
 from torch.nn.init import constant_, kaiming_uniform_, xavier_normal_, xavier_uniform_
 
@@ -11,27 +14,30 @@ def xavier_normal_initialization(module):
         https://pytorch.org/docs/stable/nn.init.html?highlight=xavier_normal_#torch.nn.init.xavier_normal_
 
     """
-    if isinstance(module, nn.Embedding):
-        xavier_normal_(module.weight)
-    elif isinstance(module, nn.Parameter):
-        if module.dim() == 1:
-            xavier_uniform_(module.unsqueeze(0)).squeeze(0)
-        else:
-            xavier_uniform_(module)
-    elif isinstance(module, nn.Linear):
-        xavier_normal_(module.weight)
-        if module.bias is not None:
-            constant_(module.bias, 0)
-    # recursively handle sub-modules
-    elif isinstance(module, nn.ModuleDict):
-        for sub_module in module.values():
-            xavier_normal_initialization(sub_module)
-    elif isinstance(module, nn.ModuleList):
-        for sub_module in module:
-            xavier_normal_initialization(sub_module)
-    elif isinstance(module, nn.ParameterDict):
-        for sub_module in module.values():
-            xavier_normal_initialization(sub_module)
+    with torch.no_grad():
+        if isinstance(module, nn.Embedding):
+            xavier_normal_(module.weight)
+        elif isinstance(module, nn.Parameter):
+            if module.dim() == 1:
+                embed_dim = module.size(0)
+                bound = math.sqrt(6 / embed_dim)
+                module.normal_(-bound, bound)
+            else:
+                xavier_normal_(module)
+        elif isinstance(module, nn.Linear):
+            xavier_normal_(module.weight)
+            if module.bias is not None:
+                constant_(module.bias, 0)
+        # recursively handle sub-modules
+        elif isinstance(module, nn.ModuleDict):
+            for sub_module in module.values():
+                xavier_normal_initialization(sub_module)
+        elif isinstance(module, nn.ModuleList):
+            for sub_module in module:
+                xavier_normal_initialization(sub_module)
+        elif isinstance(module, nn.ParameterDict):
+            for sub_module in module.values():
+                xavier_normal_initialization(sub_module)
 
 
 def xavier_uniform_initialization(module):
@@ -43,27 +49,30 @@ def xavier_uniform_initialization(module):
         https://pytorch.org/docs/stable/nn.init.html?highlight=xavier_uniform_#torch.nn.init.xavier_uniform_
 
     """
-    if isinstance(module, nn.Embedding):
-        xavier_uniform_(module.weight)
-    elif isinstance(module, nn.Parameter):
-        if module.dim() == 1:
-            xavier_uniform_(module.unsqueeze(0)).squeeze(0)
-        else:
-            xavier_uniform_(module)
-    elif isinstance(module, nn.Linear):
-        xavier_uniform_(module.weight)
-        if module.bias is not None:
-            constant_(module.bias, 0)
-    # recursively handle sub-modules
-    elif isinstance(module, nn.ModuleDict):
-        for sub_module in module.values():
-            xavier_uniform_initialization(sub_module)
-    elif isinstance(module, nn.ModuleList):
-        for sub_module in module:
-            xavier_uniform_initialization(sub_module)
-    elif isinstance(module, nn.ParameterDict):
-        for sub_module in module.values():
-            xavier_uniform_initialization(sub_module)
+    with torch.no_grad():
+        if isinstance(module, nn.Embedding):
+            xavier_uniform_(module.weight)
+        elif isinstance(module, nn.Parameter):
+            if module.dim() == 1:
+                embed_dim = module.size(0)
+                bound = math.sqrt(6 / embed_dim)
+                module.uniform_(-bound, bound)
+            else:
+                xavier_uniform_(module)
+        elif isinstance(module, nn.Linear):
+            xavier_uniform_(module.weight)
+            if module.bias is not None:
+                constant_(module.bias, 0)
+        # recursively handle sub-modules
+        elif isinstance(module, nn.ModuleDict):
+            for sub_module in module.values():
+                xavier_uniform_initialization(sub_module)
+        elif isinstance(module, nn.ModuleList):
+            for sub_module in module:
+                xavier_uniform_initialization(sub_module)
+        elif isinstance(module, nn.ParameterDict):
+            for sub_module in module.values():
+                xavier_uniform_initialization(sub_module)
 
 
 def kaiming_uniform_initialization(module, nonlinearity="leaky_relu", a=0.2):
