@@ -93,9 +93,9 @@ class MTDPRec(KGATRec):
         if self.use_mini_batch:
             input_nodes = ("user", user)
             subgraph = self.get_subgraph(input_nodes)
-            emb_dict = self.kgat_model(subgraph)
+            emb_dict = self.kgat_model(subgraph, training=True)
         else:
-            emb_dict = self.kgat_model(self.hetero_data)  # Compute embedding for training
+            emb_dict = self.kgat_model(self.hetero_data, training=True)  # Compute embedding for training
 
         user_emb = emb_dict["user"]
         item_emb = emb_dict["movie"]
@@ -169,20 +169,23 @@ class MTDPRec(KGATRec):
             cos_dps_dpm = cos(g_dps.unsqueeze(0), g_dpm.unsqueeze(0)).item()
             cos_dpr_dpm = cos(g_dpr.unsqueeze(0), g_dpm.unsqueeze(0)).item()
 
-            self.log_dict({
-                "cos_main_dps": cos_main_dps,
-                "cos_main_dpr": cos_main_dpr,
-                "cos_main_dpm": cos_main_dpm,
-                "cos_dps_dpr": cos_dps_dpr,
-                "cos_dps_dpm": cos_dps_dpm,
-                "cos_dpr_dpm": cos_dpr_dpm,
-            }, prog_bar=True)
+            self.log_dict(
+                {
+                    "cos_main_dps": cos_main_dps,
+                    "cos_main_dpr": cos_main_dpr,
+                    "cos_main_dpm": cos_main_dpm,
+                    "cos_dps_dpr": cos_dps_dpr,
+                    "cos_dps_dpm": cos_dps_dpm,
+                    "cos_dpr_dpm": cos_dpr_dpm,
+                },
+                prog_bar=True,
+            )
 
         return total_loss
 
     def get_flat_grads(self, loss):
         self.zero_grad(set_to_none=True)  # Clear existing gradients.
-        loss.backward(retain_graph=True) # Compute grads for analysis only
+        loss.backward(retain_graph=True)  # Compute grads for analysis only
         grads = []
         for p in self.parameters():
             # If a parameter did not contribute to the loss, substitute with zeros.

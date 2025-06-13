@@ -28,6 +28,8 @@ class KGATRec(LightningModule):
         embedding_dim=64,
         rel_emb_dim=8,
         num_layers=3,
+        node_dropout=0.0,
+        mess_dropout=0.0,
         num_neighbors=-1,  # -1 means all neighbors
         lr=1e-3,
         reg_weight=1e-5,
@@ -43,6 +45,8 @@ class KGATRec(LightningModule):
         self.embedding_dim = embedding_dim
         self.rel_emb_dim = rel_emb_dim
         self.num_layers = num_layers
+        self.node_dropout = node_dropout
+        self.mess_dropout = mess_dropout
         self.num_neighbors = num_neighbors
         self.use_mini_batch = use_mini_batch
 
@@ -64,6 +68,8 @@ class KGATRec(LightningModule):
             embed_dim=self.embedding_dim,
             rel_emb_dim=self.rel_emb_dim,
             num_layers=self.num_layers,
+            node_dropout=self.node_dropout,
+            mess_dropout=self.mess_dropout,
             aggr="bi-interaction",  # Use bi-interaction aggregation
             device=self.device,
         )
@@ -85,9 +91,9 @@ class KGATRec(LightningModule):
         if self.use_mini_batch:
             input_nodes = ("user", user)
             subgraph = self.get_subgraph(input_nodes)
-            emb_dict = self.kgat_model(subgraph)
+            emb_dict = self.kgat_model(subgraph, training=True)
         else:
-            emb_dict = self.kgat_model(self.hetero_data)  # Compute embedding for training
+            emb_dict = self.kgat_model(self.hetero_data, training=True)  # Compute embedding for training
 
         user_emb = emb_dict["user"]
         item_emb = emb_dict["movie"]

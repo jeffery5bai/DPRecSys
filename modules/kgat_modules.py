@@ -3,18 +3,28 @@ import torch.nn as nn
 import torch.nn.functional as F
 from common.init import kaiming_uniform_initialization, xavier_uniform_initialization
 from torch_geometric.nn import HeteroConv, MessagePassing
-from torch_geometric.utils import softmax
+from torch_geometric.utils import dropout_adj, dropout_node, softmax
 
 
 class KGAT(nn.Module):
     def __init__(
-        self, hetero_data, embed_dim, rel_emb_dim, num_layers=3, aggr="bi-interaction", device="cuda"
+        self,
+        hetero_data,
+        embed_dim,
+        rel_emb_dim,
+        num_layers=3,
+        node_dropout=0.0,
+        mess_dropout=0.0,
+        aggr="bi-interaction",
+        device="cuda",
     ):
         super().__init__()
         self.hetero_data = hetero_data
         self.embed_dim = embed_dim
         self.rel_emb_dim = rel_emb_dim
         self.num_layers = num_layers
+        self.node_dropout = node_dropout
+        self.mess_dropout = mess_dropout
         self.aggr = aggr
         self.device = device
 
@@ -51,7 +61,7 @@ class KGAT(nn.Module):
         for _ in range(num_layers):
             conv = HeteroConv(
                 {
-                    edge_type: KGATConv(self.rel_params, edge_type[1])
+                    edge_type: KGATConv(self.rel_params, edge_type[1], node_dropout)
                     for edge_type in self.hetero_data.edge_types
                 },
                 aggr="sum",
@@ -70,7 +80,9 @@ class KGAT(nn.Module):
         # if self.linear_bi is not None:
         #     kaiming_uniform_initialization(self.linear_bi, nonlinearity="leaky_relu", a=0.2)
 
-    def forward(self, hetero_graph):
+        self.dropout = nn.Dropout(mess_dropout)
+
+    def forward(self, hetero_graph, training=False):
         """Forward pass through the KGAT model. return Dict[node_type: embeddings]"""
         device = next(self.parameters()).device
         x_dict = {k: v.weight.to(device) for k, v in self.embeddings.items()}
@@ -81,7 +93,7 @@ class KGAT(nn.Module):
         for kgat_layer in self.kgat_layers:
             # 4-1. Aggregate neighbor embeddings
             ego_emb_dict = x_dict
-            neighbor_emb_dict = kgat_layer(ego_emb_dict, edge_index_dict)
+            neighbor_emb_dict = kgat_layer(ego_emb_dict, edge_index_dict, arg_dict={"training": training})
             # 4-2. Aggregate ego and side info (as in KGAT)
             x_dict = self.aggregate(ego_emb_dict, neighbor_emb_dict, aggr=self.aggr)
             all_embeddings.append(x_dict)
@@ -98,20 +110,24 @@ class KGAT(nn.Module):
     def aggregate(self, v_dict, v_neighbor_dict, aggr="bi-interaction"):
         if aggr == "gcn":
             return {
-                node_type: self.leaky_relu(self.linear(v_dict[node_type] + v_neighbor_dict[node_type]))
+                node_type: self.dropout(
+                    self.leaky_relu(self.linear(v_dict[node_type] + v_neighbor_dict[node_type]))
+                )
                 for node_type in v_dict
             }
         elif aggr == "graphsage":
             return {
-                node_type: self.leaky_relu(
-                    self.linear(torch.cat([v_dict[node_type], v_neighbor_dict[node_type]]))
+                node_type: self.dropout(
+                    self.leaky_relu(self.linear(torch.cat([v_dict[node_type], v_neighbor_dict[node_type]])))
                 )
                 for node_type in v_dict
             }
         else:  # bi-interaction
             return {
-                node_type: self.leaky_relu(self.linear(v_dict[node_type] + v_neighbor_dict[node_type]))
-                + self.leaky_relu(self.linear_bi(v_dict[node_type] * v_neighbor_dict[node_type]))
+                node_type: self.dropout(
+                    self.leaky_relu(self.linear(v_dict[node_type] + v_neighbor_dict[node_type]))
+                    + self.leaky_relu(self.linear_bi(v_dict[node_type] * v_neighbor_dict[node_type]))
+                )
                 for node_type in v_dict
             }
 
@@ -127,16 +143,20 @@ class RelationParams(nn.Module):
 
 
 class KGATConv(MessagePassing):
-    def __init__(self, rel_params, rel_name):
+    def __init__(self, rel_params, rel_name, dropout=0.0):
         super().__init__(aggr="add")  # or 'mean'
         self.rel_params = rel_params
         self.rel_name = rel_name
+        self.dropout = dropout
 
-    def forward(self, x, edge_index):
+    def forward(self, x, edge_index, arg_dict={"training": False}):
         r_emb, trans_r = self.rel_params.get(self.rel_name)
 
         device = r_emb.device
         x = (x[0].to(device), x[1].to(device))
+
+        if self.dropout > 0:
+            edge_index, _, _ = dropout_node(edge_index, p=self.dropout, training=arg_dict["training"])
         edge_index = edge_index.to(device)
         return self.propagate(edge_index, x=x, r_emb=r_emb, trans_r=trans_r)
 

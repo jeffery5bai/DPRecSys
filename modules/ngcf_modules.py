@@ -8,7 +8,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.nn import MessagePassing
-from torch_geometric.utils import dropout_adj
+from torch_geometric.utils import dropout_adj, dropout_node
 
 
 class NGCF(nn.Module):
@@ -65,9 +65,7 @@ class NGCFConv(MessagePassing):
 
     def forward(self, x, edge_index, training=False):
         if self.dropout > 0:
-            edge_index, _ = dropout_adj(
-                edge_index, p=self.dropout, force_undirected=True, num_nodes=x.size(0), training=training
-            )
+            edge_index, _, _ = dropout_node(edge_index, p=self.dropout, training=training)
         return self.propagate(edge_index, x=x)
 
     def message(self, x_i, x_j):
