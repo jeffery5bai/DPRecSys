@@ -1,3 +1,5 @@
+"""This file has been deprecated."""
+
 import os
 import sys
 
