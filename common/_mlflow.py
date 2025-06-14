@@ -37,6 +37,7 @@ def get_callbacks(
     patience: int,
     hyper_param_str: str = "",
     exp_name: str = "",
+    version_name: str = "",
     monitor_metric: str = "val_ndcg10",
     monitor_mode: str = "max",
     min_delta: float = 0.0,
@@ -60,7 +61,7 @@ def get_callbacks(
         save_top_k=1,
         save_weights_only=True,
         dirpath=f"test_checkpoints/{exp_name}",
-        filename=f"{run_name}-{hyper_param_str}-best-checkpoint-{{epoch:02d}}-{{{monitor_metric}:.2f}}",
+        filename=f"[{version_name}]-{run_name}-{hyper_param_str}-best-checkpoint-{{epoch:02d}}-{{{monitor_metric}:.2f}}",
         verbose=True,
     )
 
