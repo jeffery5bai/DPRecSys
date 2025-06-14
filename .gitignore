@@ -19,3 +19,4 @@ test_checkpoints/
 # MLflow
 mlflow_service/
 mlruns
+cache/
