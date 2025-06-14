@@ -226,7 +226,7 @@ class UserItemPairDataset(Dataset):
 
 
 class TripletDatasetFromCached(Dataset):
-    def __init__(self, split: str = "train", cache_dir: str = "../experiments/cache"):
+    def __init__(self, split: str = "train", cache_dir: str = "cache"):
         self.split = split
         self.cache_dir = cache_dir
 
@@ -235,27 +235,27 @@ class TripletDatasetFromCached(Dataset):
         self.triplet_df = pd.read_parquet(triplet_path)
 
         # Load IDs
-        self.actor_ids = np.load(os.path.join(cache_dir, f"{split}_actor_ids.npy"), allow_pickle=True)
-        self.director_ids = np.load(os.path.join(cache_dir, f"{split}_director_ids.npy"), allow_pickle=True)
-        self.country_ids = np.load(os.path.join(cache_dir, f"{split}_country_ids.npy"), allow_pickle=True)
-        self.genre_ids = np.load(os.path.join(cache_dir, f"{split}_genre_ids.npy"), allow_pickle=True)
+        self.actor_ids = np.load(os.path.join(cache_dir, f"{split}_actor_ids.npy"), mmap_mode="r")
+        self.director_ids = np.load(os.path.join(cache_dir, f"{split}_director_ids.npy"), mmap_mode="r")
+        self.country_ids = np.load(os.path.join(cache_dir, f"{split}_country_ids.npy"), mmap_mode="r")
+        self.genre_ids = np.load(os.path.join(cache_dir, f"{split}_genre_ids.npy"), mmap_mode="r")
 
         # Load DPS
-        self.actor_dps = np.load(os.path.join(cache_dir, f"{split}_actor_dps.npy"))
-        self.director_dps = np.load(os.path.join(cache_dir, f"{split}_director_dps.npy"))
-        self.country_dps = np.load(os.path.join(cache_dir, f"{split}_country_dps.npy"))
-        self.genre_dps = np.load(os.path.join(cache_dir, f"{split}_genre_dps.npy"))
+        self.actor_dps = np.load(os.path.join(cache_dir, f"{split}_actor_dps.npy"), mmap_mode="r")
+        self.director_dps = np.load(os.path.join(cache_dir, f"{split}_director_dps.npy"), mmap_mode="r")
+        self.country_dps = np.load(os.path.join(cache_dir, f"{split}_country_dps.npy"), mmap_mode="r")
+        self.genre_dps = np.load(os.path.join(cache_dir, f"{split}_genre_dps.npy"), mmap_mode="r")
 
         # Load VEC / WVEC
-        self.actor_vec = np.load(os.path.join(cache_dir, f"{split}_actor_vec.npy"))
-        self.director_vec = np.load(os.path.join(cache_dir, f"{split}_director_vec.npy"))
-        self.country_vec = np.load(os.path.join(cache_dir, f"{split}_country_vec.npy"))
-        self.genre_vec = np.load(os.path.join(cache_dir, f"{split}_genre_vec.npy"))
+        self.actor_vec = np.load(os.path.join(cache_dir, f"{split}_actor_vec.npy"), mmap_mode="r")
+        self.director_vec = np.load(os.path.join(cache_dir, f"{split}_director_vec.npy"), mmap_mode="r")
+        self.country_vec = np.load(os.path.join(cache_dir, f"{split}_country_vec.npy"), mmap_mode="r")
+        self.genre_vec = np.load(os.path.join(cache_dir, f"{split}_genre_vec.npy"), mmap_mode="r")
 
-        self.actor_wvec = np.load(os.path.join(cache_dir, f"{split}_actor_wvec.npy"))
-        self.director_wvec = np.load(os.path.join(cache_dir, f"{split}_director_wvec.npy"))
-        self.country_wvec = np.load(os.path.join(cache_dir, f"{split}_country_wvec.npy"))
-        self.genre_wvec = np.load(os.path.join(cache_dir, f"{split}_genre_wvec.npy"))
+        self.actor_wvec = np.load(os.path.join(cache_dir, f"{split}_actor_wvec.npy"), mmap_mode="r")
+        self.director_wvec = np.load(os.path.join(cache_dir, f"{split}_director_wvec.npy"), mmap_mode="r")
+        self.country_wvec = np.load(os.path.join(cache_dir, f"{split}_country_wvec.npy"), mmap_mode="r")
+        self.genre_wvec = np.load(os.path.join(cache_dir, f"{split}_genre_wvec.npy"), mmap_mode="r")
 
         assert len(self.triplet_df) == len(self.actor_ids), "Mismatch in sample size!"
 
@@ -266,24 +266,28 @@ class TripletDatasetFromCached(Dataset):
         row = self.triplet_df.iloc[idx]
 
         batch = {
-            "userID": int(row["userID"]),
-            "pos_item_id": int(row["pos_item_id"]),
-            "neg_item_id": int(row["neg_item_id"]),
+            "user": int(row["userID"]),
+            "pos_item": int(row["pos_item_id"]),
+            "neg_item": int(row["neg_item_id"]),
+
             # IDs
-            "actor_ids": torch.from_numpy(self.actor_ids[idx]).long(),
-            "director_ids": torch.from_numpy(self.director_ids[idx]).long(),
-            "country_ids": torch.from_numpy(self.country_ids[idx]).long(),
-            "genre_ids": torch.from_numpy(self.genre_ids[idx]).long(),
+            "actor": torch.from_numpy(self.actor_ids[idx]).long(),
+            "country": torch.tensor(self.country_ids[idx]).long(),
+            "director": torch.tensor(self.director_ids[idx]).long(), # already 1D
+            "genre": torch.from_numpy(self.genre_ids[idx]).long(),
+
             # DPS
-            "actor_dps": torch.from_numpy(self.actor_dps[idx]).float(),
-            "director_dps": torch.from_numpy(self.director_dps[idx]).float(),
-            "country_dps": torch.from_numpy(self.country_dps[idx]).float(),
-            "genre_dps": torch.from_numpy(self.genre_dps[idx]).float(),
+            "actor_dps": torch.tensor(self.actor_dps[idx]).float(),
+            "director_dps": torch.tensor(self.director_dps[idx]).float(),
+            "country_dps": torch.tensor(self.country_dps[idx]).float(),
+            "genre_dps": torch.tensor(self.genre_dps[idx]).float(),
+
             # Multihot vec
             "actor_vec": torch.from_numpy(self.actor_vec[idx]).float(),
             "director_vec": torch.from_numpy(self.director_vec[idx]).float(),
             "country_vec": torch.from_numpy(self.country_vec[idx]).float(),
             "genre_vec": torch.from_numpy(self.genre_vec[idx]).float(),
+
             # Weighted vec
             "actor_wvec": torch.from_numpy(self.actor_wvec[idx]).float(),
             "director_wvec": torch.from_numpy(self.director_wvec[idx]).float(),
@@ -291,4 +295,40 @@ class TripletDatasetFromCached(Dataset):
             "genre_wvec": torch.from_numpy(self.genre_wvec[idx]).float(),
         }
 
+        return batch
+
+
+class UserItemPairDatasetFromCached(Dataset):
+    def __init__(self, split: str = "prediction", cache_dir: str = "cache"):
+        self.split = split
+        self.cache_dir = cache_dir
+
+        # Load pair (user, item, label)
+        pair_path = os.path.join(cache_dir, f"{split}_pool_df.parquet")
+        self.pair_df = pd.read_parquet(pair_path)
+
+        # Load IDs
+        self.actor_ids = np.load(os.path.join(cache_dir, f"{split}_actor_ids.npy"), mmap_mode="r")
+        self.director_ids = np.load(os.path.join(cache_dir, f"{split}_director_ids.npy"), mmap_mode="r")
+        self.country_ids = np.load(os.path.join(cache_dir, f"{split}_country_ids.npy"), mmap_mode="r")
+        self.genre_ids = np.load(os.path.join(cache_dir, f"{split}_genre_ids.npy"), mmap_mode="r")
+
+        assert len(self.pair_df) == len(self.actor_ids), "Mismatch in sample size!"
+
+    def __len__(self):
+        return len(self.pair_df)
+
+    def __getitem__(self, idx):
+        row = self.pair_df.iloc[idx]
+
+        batch = {
+            "user": int(row["userID"]),
+            "item": int(row["movieID"]),
+            "label": float(row["label"]),
+            # IDs
+            "actor": torch.from_numpy(self.actor_ids[idx]).long(),
+            "country": torch.tensor(self.country_ids[idx]).long(),
+            "director": torch.tensor(self.director_ids[idx]).long(), # already 1D
+            "genre": torch.from_numpy(self.genre_ids[idx]).long(),
+        }
         return batch

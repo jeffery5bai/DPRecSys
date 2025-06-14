@@ -88,8 +88,18 @@ def run_data_preprocessing(data_path):
         "genre": "genre_dps",
     }
 
-    VEC_FIELDS = ["actor_vec", "country_vec", "director_vec", "genre_vec"]
-    WVEC_FIELDS = ["actor_wvec", "country_wvec", "director_wvec", "genre_wvec"]
+    VEC_FIELDS = {
+        "actor": "actorID_vec",
+        "country": "country_vec",
+        "director": "directorID_vec",
+        "genre": "genre_vec",
+    }
+    WVEC_FIELDS = {
+        "actor": "actorID_wvec",
+        "country": "country_wvec",
+        "director": "directorID_wvec",
+        "genre": "genre_wvec",
+    }
 
     # 定義函式：將 dataframe 某欄是 list/np.array 的欄位，轉成 np.array
     def df_col_to_np_array(df, col_name):
@@ -134,10 +144,15 @@ def run_data_preprocessing(data_path):
                     save_np_array(df[col].values, f"{CACHE_DIR}/{split_name}_{feat}_dps.npy")
 
             # 3. 儲存 vec, wvec (item 多熱向量特徵)
-            for vec_col in VEC_FIELDS + WVEC_FIELDS:
-                if vec_col in df.columns:
-                    arr = df_col_to_np_array(df, vec_col)
-                    save_np_array(arr, f"{CACHE_DIR}/{split_name}_{vec_col}.npy")
+            for feat, col in VEC_FIELDS.items():
+                if col in df.columns:
+                    arr = df_col_to_np_array(df, col)
+                    save_np_array(arr, f"{CACHE_DIR}/{split_name}_{feat}_vec.npy")
+
+            for feat, col in WVEC_FIELDS.items():
+                if col in df.columns:
+                    arr = df_col_to_np_array(df, col)
+                    save_np_array(arr, f"{CACHE_DIR}/{split_name}_{feat}_wvec.npy")
 
     print("✅ Data cached successfully.")
 
