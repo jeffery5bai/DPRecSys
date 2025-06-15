@@ -290,7 +290,7 @@ class MTDPRecSRM(NGCFRecV2):
             rescaled_loss_dict = {
                 loss_name: self.ema_normalizer(loss, loss_name) for loss_name, loss in loss_dict.items()
             }
-        elif method == "log_scale":
+        elif method == "log":
             rescaled_loss_dict = {
                 loss_name: self.loss_scaling_module(loss) for loss_name, loss in loss_dict.items()
             }

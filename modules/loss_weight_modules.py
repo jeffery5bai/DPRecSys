@@ -37,4 +37,5 @@ class EMALossNormalizer(nn.Module):
         ema = self.ema_losses[task_name].clamp(min=self.eps)  # Avoid division by zero
         # Scale to target
         return loss / (self.static_weight * ema)
-        return loss / (self.static_weight * ema)
+
+
