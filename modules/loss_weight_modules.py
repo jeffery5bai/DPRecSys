@@ -18,7 +18,7 @@ class LogScaleLoss(nn.Module):
 
 
 class EMALossNormalizer(nn.Module):
-    def __init__(self, static_weight=1, ema_decay=0.2):
+    def __init__(self, static_weight=1, ema_decay=0.1):
         super().__init__()
         self.static_weight = static_weight
         self.ema_decay = ema_decay

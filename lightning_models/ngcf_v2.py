@@ -9,7 +9,7 @@ from modules.ngcf_modules import NGCF
 from pytorch_lightning import LightningModule
 from common.eval import Evaluator
 
-class NGCFRec(LightningModule):
+class NGCFRecV2(LightningModule):
     """
     Wrap up `NGCF` model into Lightning Module as base recommendation model.
     """
