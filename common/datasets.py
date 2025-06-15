@@ -341,8 +341,13 @@ class UserPosItemSampler(Sampler):
         min_pos_items=2,
         max_pos_items=20,
         max_triplets_per_user=None,
+        buffer=0,
+        drop_last=True,
+        seed=42,
     ):
-        self.seed = 42
+        self.seed = seed
+        self.drop_last = drop_last
+        self.buffer = buffer
         self.user_to_pos_items = {u: list(p) for u, p in user_to_pos_items.items()}
         self.user_pos_to_indices = {k: list(v) for k, v in user_pos_to_indices.items()}
         self.batch_size = batch_size
@@ -362,13 +367,16 @@ class UserPosItemSampler(Sampler):
             batch_indices = []
             while len(batch_indices) < self.batch_size and len(user_pos_to_indices) > 0:
                 # user with replacement
-                user = rnd.choice(self.users)
+                user_pool = list({u for u, _ in user_pos_to_indices.keys()})
+                user = rnd.choice(user_pool)
+
                 available_pos_items = [
                     p
                     for p in user_to_pos_items[user]
                     if (user, p) in user_pos_to_indices and len(user_pos_to_indices[(user, p)]) > 0
                 ]
 
+                # NOTE: this program may fail because the we drop samples here, making unaligned __len__ and __iter__
                 if len(available_pos_items) < self.min_pos_items:
                     for pos in available_pos_items:
                         key = (user, pos)
@@ -377,7 +385,7 @@ class UserPosItemSampler(Sampler):
                     continue
 
                 num_pos_to_take = min(len(available_pos_items), self.max_pos_items)
-                sampled_pos_items = rnd.sample(available_pos_items, num_pos_to_take)
+                sampled_pos_items = available_pos_items[:num_pos_to_take]
 
                 user_triplets = []
                 for pos_item in sampled_pos_items:
@@ -399,11 +407,14 @@ class UserPosItemSampler(Sampler):
 
                 batch_indices.extend(user_triplets)
 
-            if len(batch_indices) > 0:
+            if len(batch_indices) == self.batch_size:
+                yield batch_indices
+            elif len(batch_indices) < self.batch_size and not self.drop_last:
                 yield batch_indices
 
     def __len__(self):
-        return self.total_instances // self.batch_size
+        # NOTE: this is an approximation, as the actual number of batches may vary due to iterative sampling
+        return self.total_instances // self.batch_size - self.drop_last - self.buffer
 
 
 def get_user_triplet_mapping(
@@ -419,9 +430,12 @@ def get_user_triplet_mapping(
         user_to_pos_items[u].add(p)
 
     # filter users with ≥ min_pos_items positive items
-    user_to_pos_items = {
-        u: list(pos_items) for u, pos_items in user_to_pos_items.items() if len(pos_items) >= min_pos_items
-    }
+    for user in list(user_to_pos_items.keys()):
+        if len(user_to_pos_items[user]) < min_pos_items:
+            for pos_item in user_to_pos_items[user]:
+                key = (user, pos_item)
+                del user_pos_to_indices[key]
+            del user_to_pos_items[user]
 
     return user_to_pos_items, user_pos_to_indices
 
