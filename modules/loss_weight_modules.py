@@ -2,12 +2,13 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+
 class LogScaleLoss(nn.Module):
     """
     Dual-Balancing for Multi-Task Learning (Lin et al., 2023) (20 citations)
     This is only the half of DB-MTL method.
     """
-    
+
     def __init__(self, eps=1e-8):
         super().__init__()
         self.eps = eps
@@ -16,21 +17,24 @@ class LogScaleLoss(nn.Module):
         return torch.log(loss + self.eps)  # Apply log scaling to the input loss
 
 
-class EMALossNormalizer:
-    def __init__(self, target_scale=1e-2):
-        self.target_scale = target_scale
+class EMALossNormalizer(nn.Module):
+    def __init__(self, static_weight=1, ema_decay=0.2):
+        super().__init__()
+        self.static_weight = static_weight
+        self.ema_decay = ema_decay
+        self.eps = 1e-8
         self.ema_losses = {}
-        self.ema_decay = 0.99
-    
-    def normalize_loss(self, loss, task_name):
+
+    def forward(self, loss, task_name):
         # Update EMA
         if task_name not in self.ema_losses:
             self.ema_losses[task_name] = loss.detach()
         else:
             self.ema_losses[task_name] = (
-                self.ema_decay * self.ema_losses[task_name] + 
-                (1 - self.ema_decay) * loss.detach()
+                self.ema_decay * loss.detach() + (1 - self.ema_decay) * self.ema_losses[task_name]
             )
-        
+
+        ema = self.ema_losses[task_name].clamp(min=self.eps)  # Avoid division by zero
         # Scale to target
-        return loss * (self.target_scale / self.ema_losses[task_name])
+        return loss / (self.static_weight * ema)
+        return loss / (self.static_weight * ema)

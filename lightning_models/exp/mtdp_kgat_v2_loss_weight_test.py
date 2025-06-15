@@ -7,7 +7,6 @@ strategies:
 - Hybrid (loss scaling + gradient normalization) weights?
 """
 
-
 import os
 import sys
 
@@ -20,7 +19,7 @@ from modules.dpm_modules import DPMatcher
 from modules.dpr_modules import DPRegularizer
 from modules.dps_modules import DPSPredictor
 from modules.loss import DPRLoss, DPSLoss, KLDivergenceLoss
-from modules.loss_weight_modules import LogScaleLoss
+from modules.loss_weight_modules import EMALossNormalizer, LogScaleLoss
 
 
 class MTDPRec(KGATRecV2):
@@ -61,9 +60,9 @@ class MTDPRec(KGATRecV2):
         self.dpm_loss_fn = KLDivergenceLoss(dpm_weights=dpm_weights)
         self.dpm_weights = self.dpm_loss_fn.dpm_weights
 
-
         # NOTE: Loss scaling module
         self.loss_scaling_module = LogScaleLoss()
+        self.ema_normalizer = EMALossNormalizer(static_weight=1.0, ema_decay=0.1)
 
     def _get_first_occurrence_indices(self, tensor: torch.Tensor):
         """Get the first occurrence indices of unique values in a tensor."""
@@ -135,7 +134,12 @@ class MTDPRec(KGATRecV2):
 
         # NOTE: Calculate KG loss for embedding regularization (TransR)
         kg_loss = self.calc_kg_loss(user_emb, item_emb, user, pos_item, neg_item)
-        self.log_dict({"train_kg_loss": kg_loss, }, on_step=True)
+        self.log_dict(
+            {
+                "train_kg_loss": kg_loss,
+            },
+            on_step=True,
+        )
 
         # NOTE: Auxiliary task 1 - Diversity Preference Scale (DPS)
         unique_users, first_indices = self._get_first_occurrence_indices(user)
@@ -167,21 +171,20 @@ class MTDPRec(KGATRecV2):
         )
         self.log_dict({"train_loss": total_loss}, on_epoch=True, on_step=True)
 
-
         # NOTE: Apply loss scaling
-        balanced_bpr_loss = self.loss_scaling_module(bpr_loss)
-        balanced_kg_loss = self.loss_scaling_module(kg_loss)
-        balanced_dps_loss = self.loss_scaling_module(dps_loss)
-        balanced_dpr_loss = self.loss_scaling_module(dpr_loss)
-        balanced_dpm_loss = self.loss_scaling_module(dpm_loss)
+        balanced_bpr_loss = self.ema_normalizer(bpr_loss, "bpr_loss")  # self.loss_scaling_module(bpr_loss)
+        balanced_kg_loss = self.ema_normalizer(kg_loss, "kg_loss")  # self.loss_scaling_module(kg_loss)
+        balanced_dps_loss = self.ema_normalizer(dps_loss, "dps_loss")  # self.loss_scaling_module(dps_loss)
+        balanced_dpr_loss = self.ema_normalizer(dpr_loss, "dpr_loss")  # self.loss_scaling_module(dpr_loss)
+        balanced_dpm_loss = self.ema_normalizer(dpm_loss, "dpm_loss")  # self.loss_scaling_module(dpm_loss)
 
         self.log_dict(
             {
-                "train_balanced_bpr_loss": balanced_bpr_loss,
-                "train_balanced_kg_loss": balanced_kg_loss,
-                "train_balanced_dps_loss": balanced_dps_loss,
-                "train_balanced_dpr_loss": balanced_dpr_loss,
-                "train_balanced_dpm_loss": balanced_dpm_loss,
+                "train_normalized_bpr_loss": balanced_bpr_loss,
+                "train_normalized_kg_loss": balanced_kg_loss,
+                "train_normalized_dps_loss": balanced_dps_loss,
+                "train_normalized_dpr_loss": balanced_dpr_loss,
+                "train_normalized_dpm_loss": balanced_dpm_loss,
             },
             # on_epoch=True,
             on_step=True,
@@ -193,7 +196,7 @@ class MTDPRec(KGATRecV2):
             + self.mt_weights["dpr_loss"] * balanced_dpr_loss
             + self.mt_weights["dpm_loss"] * balanced_dpm_loss
         )
-        self.log_dict({"balanced_train_loss": balanced_total_loss}, on_epoch=True, on_step=True)
+        self.log_dict({"normalized_train_loss": balanced_total_loss}, on_epoch=True, on_step=True)
 
         return balanced_total_loss
 
