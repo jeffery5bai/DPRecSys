@@ -1,10 +1,12 @@
 import os
-from typing import Optional, Tuple
+import random
+from collections import defaultdict
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, Sampler
 
 USER_ID_FIELD = "userID"
 ITEM_ID_FIELD = "movieID"
@@ -269,25 +271,21 @@ class TripletDatasetFromCached(Dataset):
             "user": int(row["userID"]),
             "pos_item": int(row["pos_item_id"]),
             "neg_item": int(row["neg_item_id"]),
-
             # IDs
             "actor": torch.from_numpy(self.actor_ids[idx]).long(),
             "country": torch.tensor(self.country_ids[idx]).long(),
-            "director": torch.tensor(self.director_ids[idx]).long(), # already 1D
+            "director": torch.tensor(self.director_ids[idx]).long(),  # already 1D
             "genre": torch.from_numpy(self.genre_ids[idx]).long(),
-
             # DPS
             "actor_dps": torch.tensor(self.actor_dps[idx]).float(),
             "director_dps": torch.tensor(self.director_dps[idx]).float(),
             "country_dps": torch.tensor(self.country_dps[idx]).float(),
             "genre_dps": torch.tensor(self.genre_dps[idx]).float(),
-
             # Multihot vec
             "actor_vec": torch.from_numpy(self.actor_vec[idx]).float(),
             "director_vec": torch.from_numpy(self.director_vec[idx]).float(),
             "country_vec": torch.from_numpy(self.country_vec[idx]).float(),
             "genre_vec": torch.from_numpy(self.genre_vec[idx]).float(),
-
             # Weighted vec
             "actor_wvec": torch.from_numpy(self.actor_wvec[idx]).float(),
             "director_wvec": torch.from_numpy(self.director_wvec[idx]).float(),
@@ -328,7 +326,119 @@ class UserItemPairDatasetFromCached(Dataset):
             # IDs
             "actor": torch.from_numpy(self.actor_ids[idx]).long(),
             "country": torch.tensor(self.country_ids[idx]).long(),
-            "director": torch.tensor(self.director_ids[idx]).long(), # already 1D
+            "director": torch.tensor(self.director_ids[idx]).long(),  # already 1D
             "genre": torch.from_numpy(self.genre_ids[idx]).long(),
         }
         return batch
+
+
+class UserPosItemSampler(Sampler):
+    def __init__(
+        self,
+        user_to_pos_items,
+        user_pos_to_indices,
+        batch_size=1024,
+        min_pos_items=2,
+        max_pos_items=20,
+        max_triplets_per_user=None,
+    ):
+        self.seed = 42
+        self.user_to_pos_items = {u: list(p) for u, p in user_to_pos_items.items()}
+        self.user_pos_to_indices = {k: list(v) for k, v in user_pos_to_indices.items()}
+        self.batch_size = batch_size
+        self.min_pos_items = min_pos_items
+        self.max_pos_items = max_pos_items
+        self.max_triplets_per_user = max_triplets_per_user or batch_size // 10  # Default to 10% of batch size
+
+        self.users = list(self.user_to_pos_items.keys())
+        self.total_instances = sum(len(v) for v in user_pos_to_indices.values())
+
+    def __iter__(self):
+        rnd = random.Random(self.seed)  # Set random seed for reproducibility
+        user_to_pos_items = {u: list(p) for u, p in self.user_to_pos_items.items()}
+        user_pos_to_indices = {k: list(v) for k, v in self.user_pos_to_indices.items()}
+
+        while len(user_pos_to_indices) > 0:
+            batch_indices = []
+            while len(batch_indices) < self.batch_size and len(user_pos_to_indices) > 0:
+                # user with replacement
+                user = rnd.choice(self.users)
+                available_pos_items = [
+                    p
+                    for p in user_to_pos_items[user]
+                    if (user, p) in user_pos_to_indices and len(user_pos_to_indices[(user, p)]) > 0
+                ]
+
+                if len(available_pos_items) < self.min_pos_items:
+                    for pos in available_pos_items:
+                        key = (user, pos)
+                        if key in user_pos_to_indices and len(user_pos_to_indices[key]) > 0:
+                            del user_pos_to_indices[key]  # remove unfulfilled
+                    continue
+
+                num_pos_to_take = min(len(available_pos_items), self.max_pos_items)
+                sampled_pos_items = rnd.sample(available_pos_items, num_pos_to_take)
+
+                user_triplets = []
+                for pos_item in sampled_pos_items:
+                    key = (user, pos_item)
+                    available_triplets = user_pos_to_indices[key]
+                    num_to_take = min(
+                        len(available_triplets),
+                        self.batch_size - len(batch_indices) - len(user_triplets),  # remaining space in batch
+                    )
+
+                    user_triplets.extend(available_triplets[:num_to_take])
+                    user_pos_to_indices[key] = available_triplets[num_to_take:]
+
+                    if len(user_pos_to_indices[key]) == 0:
+                        del user_pos_to_indices[key]  # remove exhausted
+
+                    if len(user_triplets) >= self.max_triplets_per_user:
+                        break
+
+                batch_indices.extend(user_triplets)
+
+            if len(batch_indices) > 0:
+                yield batch_indices
+
+    def __len__(self):
+        return self.total_instances // self.batch_size
+
+
+def get_user_triplet_mapping(
+    df: pd.DataFrame, min_pos_items: int = 2
+) -> Tuple[Dict[str, List[int]], Dict[Tuple[str, int], List[int]]]:
+
+    user_to_pos_items = defaultdict(set)
+    user_pos_to_indices = defaultdict(list)
+
+    for idx, row in df.iterrows():
+        u, p = row["userID"], row["pos_item_id"]
+        user_pos_to_indices[(u, p)].append(idx)
+        user_to_pos_items[u].add(p)
+
+    # filter users with ≥ min_pos_items positive items
+    user_to_pos_items = {
+        u: list(pos_items) for u, pos_items in user_to_pos_items.items() if len(pos_items) >= min_pos_items
+    }
+
+    return user_to_pos_items, user_pos_to_indices
+
+
+def validate_unique_pairs(a, b):
+    # Stack and find unique (a, b) pairs
+    pairs = torch.stack([a, b], dim=1)
+    unique_pairs = torch.unique(pairs, dim=0)
+
+    # Count number of unique b's per a
+    from collections import defaultdict
+
+    a_to_b = defaultdict(set)
+    for a_val, b_val in unique_pairs.tolist():
+        a_to_b[a_val].add(b_val)
+
+    # Validate all a have at least 2 unique b's
+    all_valid = all(len(b_set) >= 2 for b_set in a_to_b.values())
+
+    print("All a have ≥2 unique b values:", all_valid)
