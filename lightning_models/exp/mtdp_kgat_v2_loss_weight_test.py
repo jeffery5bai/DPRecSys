@@ -30,15 +30,20 @@ class MTDPRec(KGATRecV2):
     - Diversity Preference Matching (DPM) (M)
     """
 
-    def __init__(self, dps_weights=None, dpr_weights=None, dpm_weights=None, mt_weights=None, **kwargs):
+    def __init__(self, dps_weights=None, dpr_weights=None, dpm_weights=None, mt_weights=None, rescale_method=None, **kwargs):
         super().__init__(**kwargs)
         self.save_hyperparameters()
+
+        # # NOTE: [IMPORTANT] set this to manually optimize the model
+        # self.automatic_optimization = False
+        self.rescale_method = rescale_method
 
         self.mt_weights = (
             mt_weights
             if mt_weights is not None
             else {
-                "rec_loss": 1.0,
+                "bpr_loss": 1.0,
+                "kg_loss": 1.0,
                 "dps_loss": 1.0,
                 "dpr_loss": 1.0,
                 "dpm_loss": 1.0,
@@ -124,7 +129,7 @@ class MTDPRec(KGATRecV2):
 
         self.log_dict(
             {
-                "train_bpr_loss": self.mt_weights["rec_loss"] * bpr_loss,
+                "train_bpr_loss": self.mt_weights["bpr_loss"] * bpr_loss,
                 # "train_pair_loss": pair_loss,
                 # "train_reg_loss": self.reg_weight * reg_loss,
             },
@@ -164,7 +169,8 @@ class MTDPRec(KGATRecV2):
 
         # TODO: weighing the main task and auxiliary task losses
         total_loss = (
-            self.mt_weights["rec_loss"] * (bpr_loss + kg_loss)
+            self.mt_weights["bpr_loss"] * bpr_loss
+            + self.mt_weights["kg_loss"] * kg_loss
             + self.mt_weights["dps_loss"] * dps_loss
             + self.mt_weights["dpr_loss"] * dpr_loss
             + self.mt_weights["dpm_loss"] * dpm_loss
@@ -172,33 +178,44 @@ class MTDPRec(KGATRecV2):
         self.log_dict({"train_loss": total_loss}, on_epoch=True, on_step=True)
 
         # NOTE: Apply loss scaling
-        balanced_bpr_loss = self.ema_normalizer(bpr_loss, "bpr_loss")  # self.loss_scaling_module(bpr_loss)
-        balanced_kg_loss = self.ema_normalizer(kg_loss, "kg_loss")  # self.loss_scaling_module(kg_loss)
-        balanced_dps_loss = self.ema_normalizer(dps_loss, "dps_loss")  # self.loss_scaling_module(dps_loss)
-        balanced_dpr_loss = self.ema_normalizer(dpr_loss, "dpr_loss")  # self.loss_scaling_module(dpr_loss)
-        balanced_dpm_loss = self.ema_normalizer(dpm_loss, "dpm_loss")  # self.loss_scaling_module(dpm_loss)
+        loss_dict = {
+            "bpr_loss": bpr_loss,
+            "kg_loss": kg_loss,
+            "dps_loss": dps_loss,
+            "dpr_loss": dpr_loss,
+            "dpm_loss": dpm_loss,
+        }
+        rescaled_total_loss, rescaled_loss_dict = self.rescale_loss_weighting(loss_dict, method="ema")
 
-        self.log_dict(
-            {
-                "train_normalized_bpr_loss": balanced_bpr_loss,
-                "train_normalized_kg_loss": balanced_kg_loss,
-                "train_normalized_dps_loss": balanced_dps_loss,
-                "train_normalized_dpr_loss": balanced_dpr_loss,
-                "train_normalized_dpm_loss": balanced_dpm_loss,
-            },
-            # on_epoch=True,
-            on_step=True,
-        )
+        # balanced_bpr_loss = self.ema_normalizer(bpr_loss, "bpr_loss")  # self.loss_scaling_module(bpr_loss)
+        # balanced_kg_loss = self.ema_normalizer(kg_loss, "kg_loss")  # self.loss_scaling_module(kg_loss)
+        # balanced_dps_loss = self.ema_normalizer(dps_loss, "dps_loss")  # self.loss_scaling_module(dps_loss)
+        # balanced_dpr_loss = self.ema_normalizer(dpr_loss, "dpr_loss")  # self.loss_scaling_module(dpr_loss)
+        # balanced_dpm_loss = self.ema_normalizer(dpm_loss, "dpm_loss")  # self.loss_scaling_module(dpm_loss)
 
-        balanced_total_loss = (
-            self.mt_weights["rec_loss"] * (balanced_bpr_loss + balanced_kg_loss)
-            + self.mt_weights["dps_loss"] * balanced_dps_loss
-            + self.mt_weights["dpr_loss"] * balanced_dpr_loss
-            + self.mt_weights["dpm_loss"] * balanced_dpm_loss
-        )
-        self.log_dict({"normalized_train_loss": balanced_total_loss}, on_epoch=True, on_step=True)
+        # self.log_dict(
+        #     {
+        #         "train_normalized_bpr_loss": balanced_bpr_loss,
+        #         "train_normalized_kg_loss": balanced_kg_loss,
+        #         "train_normalized_dps_loss": balanced_dps_loss,
+        #         "train_normalized_dpr_loss": balanced_dpr_loss,
+        #         "train_normalized_dpm_loss": balanced_dpm_loss,
+        #     },
+        #     # on_epoch=True,
+        #     on_step=True,
+        # )
 
-        return balanced_total_loss
+        # balanced_total_loss = (
+        #     self.mt_weights["bpr_loss"] * balanced_bpr_loss
+        #     + self.mt_weights["kg_loss"] * balanced_kg_loss
+        #     + self.mt_weights["dps_loss"] * balanced_dps_loss
+        #     + self.mt_weights["dpr_loss"] * balanced_dpr_loss
+        #     + self.mt_weights["dpm_loss"] * balanced_dpm_loss
+        # )
+        # self.log_dict({"normalized_train_loss": balanced_total_loss}, on_epoch=True, on_step=True)
+
+        # return balanced_total_loss
+        return rescaled_total_loss
 
     def get_flat_grads(self, loss):
         self.zero_grad(set_to_none=True)  # Clear existing gradients.
@@ -285,3 +302,35 @@ class MTDPRec(KGATRecV2):
         # TODO: Save anything you want to log after model training for analysis
         outputs = self.val_step_outputs
         self.val_results = {}
+
+    def rescale_loss_weighting(self, loss_dict, method: str = "ema"):
+        """Dynamically adjust the loss weight based on the loss value."""
+        # NOTE: Apply loss scaling
+        if method == "ema":
+            rescaled_loss_dict = {
+                loss_name: self.ema_normalizer(loss, loss_name) for loss_name, loss in loss_dict.items()
+            }
+        elif method == "log_scale":
+            rescaled_loss_dict = {
+                loss_name: self.loss_scaling_module(loss) for loss_name, loss in loss_dict.items()
+            }
+        else:
+            raise NotImplementedError(f"Loss normalization method '{method}' is not implemented.")
+
+        rescaled_total_loss = 0
+        for loss_name, normalized_loss in rescaled_loss_dict.items():
+            rescaled_total_loss += self.mt_weights[loss_name] * normalized_loss
+
+        # NOTE: Log the rescaled losses
+        self.log_dict(
+            {
+                f"train_{method}_{loss_name}": normalized_loss
+                for loss_name, normalized_loss in rescaled_loss_dict.items()
+            },
+            # on_epoch=True,
+            on_step=True,
+        )
+        self.log_dict({"normalized_train_loss": rescaled_total_loss}, on_epoch=True, on_step=True)
+
+        return rescaled_total_loss, rescaled_loss_dict
+

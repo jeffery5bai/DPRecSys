@@ -154,45 +154,25 @@ class MTDPRecSRM(NGCFRecV2):
         )
         self.log_dict({"train_loss": total_loss}, on_epoch=True, on_step=True)
 
+        loss_dict = {
+            "bpr_loss": bpr_loss,
+            "dps_loss": dps_loss,
+            "dpr_loss": dpr_loss,
+            "dpm_loss": dpm_loss,
+        }
+
         # NOTE: Apply loss scaling
         if self.rescale_method is not None:
-            loss_dict = {
-                "bpr_loss": bpr_loss,
-                "dps_loss": dps_loss,
-                "dpr_loss": dpr_loss,
-                "dpm_loss": dpm_loss,
-            }
             total_loss, rescaled_loss_dict = self.rescale_loss_weighting(
                 loss_dict, method=self.rescale_method
             )
 
         # NOTE: Gradient Conflict Test
         if self.global_step % 50 == 0:
-            # --- Gradient extraction ---
-            g_main = self.get_flat_grads(bpr_loss)
-            g_dps = self.get_flat_grads(dps_loss)
-            g_dpr = self.get_flat_grads(dpr_loss)
-            g_dpm = self.get_flat_grads(dpm_loss)
-
-            # --- Cosine similarities ---
-            cos = F.cosine_similarity
-
-            cos_main_dps = cos(g_main.unsqueeze(0), g_dps.unsqueeze(0)).item()
-            cos_main_dpr = cos(g_main.unsqueeze(0), g_dpr.unsqueeze(0)).item()
-            cos_main_dpm = cos(g_main.unsqueeze(0), g_dpm.unsqueeze(0)).item()
-            cos_dps_dpr = cos(g_dps.unsqueeze(0), g_dpr.unsqueeze(0)).item()
-            cos_dps_dpm = cos(g_dps.unsqueeze(0), g_dpm.unsqueeze(0)).item()
-            cos_dpr_dpm = cos(g_dpr.unsqueeze(0), g_dpm.unsqueeze(0)).item()
-
             self.log_dict(
-                {
-                    "cos_main_dps": cos_main_dps,
-                    "cos_main_dpr": cos_main_dpr,
-                    "cos_main_dpm": cos_main_dpm,
-                    "cos_dps_dpr": cos_dps_dpr,
-                    "cos_dps_dpm": cos_dps_dpm,
-                    "cos_dpr_dpm": cos_dpr_dpm,
-                },
+                self.gradient_conflict_test(
+                    loss_dict=rescaled_loss_dict if self.rescale_method else loss_dict
+                ),
                 prog_bar=True,
             )
 
@@ -211,6 +191,36 @@ class MTDPRecSRM(NGCFRecV2):
         flat_grad = torch.cat(grads)
         self.zero_grad(set_to_none=True)
         return flat_grad
+
+    def gradient_conflict_test(self, loss_dict):
+        """
+        Test for gradient conflict by computing cosine similarities between gradients of different losses.
+        This is useful to understand if the auxiliary tasks are conflicting with the main task.
+        """
+        # --- Gradient extraction ---
+        g_main = self.get_flat_grads(loss_dict["bpr_loss"])
+        g_dps = self.get_flat_grads(loss_dict["dps_loss"])
+        g_dpr = self.get_flat_grads(loss_dict["dpr_loss"])
+        g_dpm = self.get_flat_grads(loss_dict["dpm_loss"])
+
+        # --- Cosine similarities ---
+        cos = F.cosine_similarity
+
+        cos_main_dps = cos(g_main.unsqueeze(0), g_dps.unsqueeze(0)).item()
+        cos_main_dpr = cos(g_main.unsqueeze(0), g_dpr.unsqueeze(0)).item()
+        cos_main_dpm = cos(g_main.unsqueeze(0), g_dpm.unsqueeze(0)).item()
+        cos_dps_dpr = cos(g_dps.unsqueeze(0), g_dpr.unsqueeze(0)).item()
+        cos_dps_dpm = cos(g_dps.unsqueeze(0), g_dpm.unsqueeze(0)).item()
+        cos_dpr_dpm = cos(g_dpr.unsqueeze(0), g_dpm.unsqueeze(0)).item()
+
+        return {
+            "cos_main_dps": cos_main_dps,
+            "cos_main_dpr": cos_main_dpr,
+            "cos_main_dpm": cos_main_dpm,
+            "cos_dps_dpr": cos_dps_dpr,
+            "cos_dps_dpm": cos_dps_dpm,
+            "cos_dpr_dpm": cos_dpr_dpm,
+        }
 
     def validation_step(self, batch, batch_idx):
         """We use user-item triplets for validation, so we need to compute scores for each triplet."""

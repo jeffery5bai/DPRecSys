@@ -10,6 +10,7 @@ from modules.dpm_modules import DPMatcher
 from modules.dpr_modules import DPRegularizer
 from modules.dps_modules import DPSPredictor
 from modules.loss import DPRLoss, DPSLoss, KLDivergenceLoss
+from modules.loss_weight_modules import EMALossNormalizer, LogScaleLoss
 
 
 class MTDPRec(KGATRecV2):
@@ -20,15 +21,28 @@ class MTDPRec(KGATRecV2):
     - Diversity Preference Matching (DPM) (M)
     """
 
-    def __init__(self, dps_weights=None, dpr_weights=None, dpm_weights=None, mt_weights=None, **kwargs):
+    def __init__(
+        self,
+        dps_weights=None,
+        dpr_weights=None,
+        dpm_weights=None,
+        mt_weights=None,
+        rescale_method=None,
+        **kwargs,
+    ):
         super().__init__(**kwargs)
         self.save_hyperparameters()
+
+        # # NOTE: [IMPORTANT] set this to manually optimize the model
+        # self.automatic_optimization = False
+        self.rescale_method = rescale_method
 
         self.mt_weights = (
             mt_weights
             if mt_weights is not None
             else {
-                "rec_loss": 1.0,
+                "bpr_loss": 1.0,
+                "kg_loss": 1.0,
                 "dps_loss": 1.0,
                 "dpr_loss": 1.0,
                 "dpm_loss": 1.0,
@@ -49,6 +63,10 @@ class MTDPRec(KGATRecV2):
         self.dpm_module = DPMatcher()
         self.dpm_loss_fn = KLDivergenceLoss(dpm_weights=dpm_weights)
         self.dpm_weights = self.dpm_loss_fn.dpm_weights
+
+        # NOTE: Loss scaling module
+        self.loss_scaling_module = LogScaleLoss()
+        self.ema_normalizer = EMALossNormalizer(static_weight=1.0, ema_decay=0.1)
 
     def _get_first_occurrence_indices(self, tensor: torch.Tensor):
         """Get the first occurrence indices of unique values in a tensor."""
@@ -109,8 +127,7 @@ class MTDPRec(KGATRecV2):
         bpr_loss = pair_loss + self.reg_weight * reg_loss
         self.log_dict(
             {
-                "train_bpr_loss": self.mt_weights["rec_loss"] * bpr_loss,
-                "train_pair_loss": pair_loss,
+                "train_bpr_loss": self.mt_weights["bpr_loss"] * bpr_loss,
                 "train_reg_loss": self.reg_weight * reg_loss,
             },
             on_epoch=True,
@@ -144,40 +161,33 @@ class MTDPRec(KGATRecV2):
 
         # TODO: weighing the main task and auxiliary task losses
         total_loss = (
-            self.mt_weights["rec_loss"] * (bpr_loss + kg_loss)
+            self.mt_weights["bpr_loss"] * bpr_loss
+            + self.mt_weights["kg_loss"] * kg_loss
             + self.mt_weights["dps_loss"] * dps_loss
             + self.mt_weights["dpr_loss"] * dpr_loss
             + self.mt_weights["dpm_loss"] * dpm_loss
         )
         self.log_dict({"train_loss": total_loss}, on_epoch=True, on_step=True)
 
+        loss_dict = {
+            "bpr_loss": bpr_loss,
+            "dps_loss": dps_loss,
+            "dpr_loss": dpr_loss,
+            "dpm_loss": dpm_loss,
+        }
+
+        # NOTE: Apply loss scaling
+        if self.rescale_method is not None:
+            total_loss, rescaled_loss_dict = self.rescale_loss_weighting(
+                loss_dict, method=self.rescale_method
+            )
+
         # NOTE: Gradient Conflict Test
         if self.global_step % 50 == 0:
-            # --- Gradient extraction ---
-            g_main = self.get_flat_grads(bpr_loss)
-            g_dps = self.get_flat_grads(dps_loss)
-            g_dpr = self.get_flat_grads(dpr_loss)
-            g_dpm = self.get_flat_grads(dpm_loss)
-
-            # --- Cosine similarities ---
-            cos = F.cosine_similarity
-
-            cos_main_dps = cos(g_main.unsqueeze(0), g_dps.unsqueeze(0)).item()
-            cos_main_dpr = cos(g_main.unsqueeze(0), g_dpr.unsqueeze(0)).item()
-            cos_main_dpm = cos(g_main.unsqueeze(0), g_dpm.unsqueeze(0)).item()
-            cos_dps_dpr = cos(g_dps.unsqueeze(0), g_dpr.unsqueeze(0)).item()
-            cos_dps_dpm = cos(g_dps.unsqueeze(0), g_dpm.unsqueeze(0)).item()
-            cos_dpr_dpm = cos(g_dpr.unsqueeze(0), g_dpm.unsqueeze(0)).item()
-
             self.log_dict(
-                {
-                    "cos_main_dps": cos_main_dps,
-                    "cos_main_dpr": cos_main_dpr,
-                    "cos_main_dpm": cos_main_dpm,
-                    "cos_dps_dpr": cos_dps_dpr,
-                    "cos_dps_dpm": cos_dps_dpm,
-                    "cos_dpr_dpm": cos_dpr_dpm,
-                },
+                self.gradient_conflict_test(
+                    loss_dict=rescaled_loss_dict if self.rescale_method else loss_dict
+                ),
                 prog_bar=True,
             )
 
@@ -196,6 +206,36 @@ class MTDPRec(KGATRecV2):
         flat_grad = torch.cat(grads)
         self.zero_grad(set_to_none=True)
         return flat_grad
+
+    def gradient_conflict_test(self, loss_dict):
+        """
+        Test for gradient conflict by computing cosine similarities between gradients of different losses.
+        This is useful to understand if the auxiliary tasks are conflicting with the main task.
+        """
+        # --- Gradient extraction ---
+        g_main = self.get_flat_grads(loss_dict["bpr_loss"])
+        g_dps = self.get_flat_grads(loss_dict["dps_loss"])
+        g_dpr = self.get_flat_grads(loss_dict["dpr_loss"])
+        g_dpm = self.get_flat_grads(loss_dict["dpm_loss"])
+
+        # --- Cosine similarities ---
+        cos = F.cosine_similarity
+
+        cos_main_dps = cos(g_main.unsqueeze(0), g_dps.unsqueeze(0)).item()
+        cos_main_dpr = cos(g_main.unsqueeze(0), g_dpr.unsqueeze(0)).item()
+        cos_main_dpm = cos(g_main.unsqueeze(0), g_dpm.unsqueeze(0)).item()
+        cos_dps_dpr = cos(g_dps.unsqueeze(0), g_dpr.unsqueeze(0)).item()
+        cos_dps_dpm = cos(g_dps.unsqueeze(0), g_dpm.unsqueeze(0)).item()
+        cos_dpr_dpm = cos(g_dpr.unsqueeze(0), g_dpm.unsqueeze(0)).item()
+
+        return {
+            "cos_main_dps": cos_main_dps,
+            "cos_main_dpr": cos_main_dpr,
+            "cos_main_dpm": cos_main_dpm,
+            "cos_dps_dpr": cos_dps_dpr,
+            "cos_dps_dpm": cos_dps_dpm,
+            "cos_dpr_dpm": cos_dpr_dpm,
+        }
 
     def validation_step(self, batch, batch_idx):
         """We use user-item triplets for validation, so we need to compute scores for each triplet."""
@@ -255,16 +295,44 @@ class MTDPRec(KGATRecV2):
 
         # TODO: weighing the main task and auxiliary task losses
         total_loss = (
-            self.mt_weights["rec_loss"] * (bpr_loss + kg_loss)
+            self.mt_weights["bpr_loss"] * bpr_loss
+            + self.mt_weights["kg_loss"] * kg_loss
             + self.mt_weights["dps_loss"] * dps_loss
             + self.mt_weights["dpr_loss"] * dpr_loss
             + self.mt_weights["dpm_loss"] * dpm_loss
         )
         self.log_dict({"val_loss": total_loss}, on_epoch=True, on_step=True)
 
-        self.val_step_outputs.append({})
-
     def on_validation_epoch_end(self):
-        # TODO: Save anything you want to log after model training for analysis
-        outputs = self.val_step_outputs
-        self.val_results = {}
+        pass
+
+    def rescale_loss_weighting(self, loss_dict, method: str = "ema"):
+        """Dynamically adjust the loss weight based on the loss value."""
+        # NOTE: Apply loss scaling
+        if method == "ema":
+            rescaled_loss_dict = {
+                loss_name: self.ema_normalizer(loss, loss_name) for loss_name, loss in loss_dict.items()
+            }
+        elif method == "log":
+            rescaled_loss_dict = {
+                loss_name: self.loss_scaling_module(loss) for loss_name, loss in loss_dict.items()
+            }
+        else:
+            raise NotImplementedError(f"Loss normalization method '{method}' is not implemented.")
+
+        rescaled_total_loss = 0
+        for loss_name, normalized_loss in rescaled_loss_dict.items():
+            rescaled_total_loss += self.mt_weights[loss_name] * normalized_loss
+
+        # NOTE: Log the rescaled losses
+        self.log_dict(
+            {
+                f"train_{method}_{loss_name}": normalized_loss
+                for loss_name, normalized_loss in rescaled_loss_dict.items()
+            },
+            # on_epoch=True,
+            on_step=True,
+        )
+        self.log_dict({"normalized_train_loss": rescaled_total_loss}, on_epoch=True, on_step=True)
+
+        return rescaled_total_loss, rescaled_loss_dict

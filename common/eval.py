@@ -40,6 +40,8 @@ FEATURE_FIELD = ["actorID", "country", "directorID", "genre"]
 FEATURE_IDX_FIELD = ["actorID_idx", "country_idx", "directorID_idx", "genre_idx"]
 IS_LIST_FEATURES = [True, False, False, True]
 
+OOV_TOKEN = "[OOV]"
+
 
 class Evaluator:
     def __init__(self, seed: int = RANDOM_SEED):
@@ -250,10 +252,11 @@ class Evaluator:
         df = eval_df.copy()
         df["topk_items"] = df["rec_items"].apply(lambda x: x[:k])
         exploded = df.explode("topk_items")
-        exploded = exploded.rename(columns={"user": "userID", "topk_items": "movieID"})
-        exploded["movieID"] = exploded["movieID"].astype(int)
+        exploded = exploded.rename(columns={"user": USER_ID_FIELD, "topk_items": ITEM_ID_FIELD})
+        exploded = exploded[exploded[ITEM_ID_FIELD] != OOV_TOKEN]
+        exploded[ITEM_ID_FIELD] = exploded[ITEM_ID_FIELD].astype(int)
 
-        print("exploded", exploded["userID"].nunique())
+        print("exploded", exploded[USER_ID_FIELD].nunique())
         # NOTE: Join item info
         exploded = DataPreprocessor().join_item_features(
             exploded,
@@ -264,7 +267,7 @@ class Evaluator:
         # NOTE: Encode features
         encoded_df = feature_engineer.transform(exploded)
 
-        print("encoded", encoded_df["userID"].nunique())
+        print("encoded", encoded_df[USER_ID_FIELD].nunique())
 
         # NOTE: Calculate Prediction DP vectors for each user
         encoded_df["rating"] = 1.0  # Set a dummy rating for the purpose of DPS calculation
@@ -288,7 +291,7 @@ class Evaluator:
             how="inner",
         )
 
-        print("combined_df", combined_df["userID"].nunique())
+        print("combined_df", combined_df[USER_ID_FIELD].nunique())
 
         # NOTE: Calculate DPMS
         print("Calculating DPMS for each feature...")
