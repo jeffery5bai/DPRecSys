@@ -1,12 +1,20 @@
 # coding: utf-8
 """Auxiliary module for DPS (Diversity Preference Scale) prediction in a recommendation system."""
 
+from typing import List
+
 import torch
 import torch.nn as nn
 
 
 class DPSPredictor(nn.Module):
-    def __init__(self, emb_dim: int, num_layers: int = 3, concat_emb: bool = True):
+    def __init__(
+        self,
+        emb_dim: int,
+        num_layers: int = 3,
+        concat_emb: bool = True,
+        features: List[str] = ["actor", "country", "director", "genre"],
+    ):
         """
         Args:
             emb_dim (int): Dimension of user embeddings
@@ -14,13 +22,11 @@ class DPSPredictor(nn.Module):
         super().__init__()
 
         # NOTE: NGCF concatenates embeddings from all layers as final embeddings
+        self.features = features
         emb_dim = emb_dim * (num_layers + 1) if concat_emb else emb_dim
 
         # Define a separate pipeline (linear layer) for each feature
-        self.actor_fc = nn.Linear(emb_dim, 1)
-        self.country_fc = nn.Linear(emb_dim, 1)
-        self.director_fc = nn.Linear(emb_dim, 1)
-        self.genre_fc = nn.Linear(emb_dim, 1)
+        self.projection_fcs = nn.ModuleDict({feature: nn.Linear(emb_dim, 1) for feature in features})
 
     def forward(self, user_emb: torch.Tensor, user_idx: torch.Tensor) -> dict:
         """
@@ -33,8 +39,6 @@ class DPSPredictor(nn.Module):
         """
         input_user_emb = user_emb[user_idx]
         return {
-            "actor_dps": torch.sigmoid(self.actor_fc(input_user_emb)).squeeze(-1),
-            "country_dps": torch.sigmoid(self.country_fc(input_user_emb)).squeeze(-1),
-            "director_dps": torch.sigmoid(self.director_fc(input_user_emb)).squeeze(-1),
-            "genre_dps": torch.sigmoid(self.genre_fc(input_user_emb)).squeeze(-1),
+            f"{feature}_dps": torch.sigmoid(self.projection_fcs[feature](input_user_emb)).squeeze(-1)
+            for feature in self.features
         }

@@ -27,9 +27,11 @@ class FTDPRec(LightningModule):
         self,
         user_emb_tensor,
         item_emb_tensor,
-        trainable,  # whether to train the original embeddings
+        strategy,  # whether to train the original embeddings
+        lora_r=None,  # rank for LoRA, if applicable
         lr=1e-3,
         reg_weight=1e-5,
+        rel_dim=16,
         dps_weights=None,
         dpr_weights=None,
         dpm_weights=None,
@@ -42,6 +44,7 @@ class FTDPRec(LightningModule):
 
         self.lr = lr
         self.reg_weight = reg_weight
+        self.rel_dim = rel_dim
 
         self.user_emb = None
         self.item_emb = None
@@ -53,8 +56,9 @@ class FTDPRec(LightningModule):
 
         self.evaluator = Evaluator()
 
-        self.embedding_model = EmbeddingWrapper(user_emb_tensor, item_emb_tensor, trainable=trainable)
-        self.trainable = trainable
+        self.embedding_model = EmbeddingWrapper(user_emb_tensor, item_emb_tensor, strategy=strategy, r=lora_r)
+        self.strategy = strategy
+        self.lora_r = lora_r
         self.embedding_dim = self.embedding_model.pretrained_user_emb.size(1)
 
         # # NOTE: [IMPORTANT] set this to manually optimize the model
@@ -82,7 +86,7 @@ class FTDPRec(LightningModule):
         self.dps_weights = self.dps_loss_fn.dps_weights
 
         # NOTE: Auxiliary task 2 - Diversity Preference Regularization (DPR)
-        self.dpr_module = DPRegularizer(emb_dim=self.embedding_dim, concat_emb=False)
+        self.dpr_module = DPRegularizer(emb_dim=self.embedding_dim, rel_dim=rel_dim, concat_emb=False)
         self.dpr_loss_fn = DPRLoss(dpr_weights=dpr_weights)
         self.dpr_weights = self.dpr_loss_fn.dpr_weights
 
@@ -159,6 +163,8 @@ class FTDPRec(LightningModule):
         # )
 
         dps_loss, dpr_loss, dpm_loss = self.task_forward(
+            user_emb,
+            item_emb,
             user,
             pos_item,
             neg_item,
@@ -204,7 +210,18 @@ class FTDPRec(LightningModule):
         return total_loss
 
     def task_forward(
-        self, user, pos_item, neg_item, yp_scores, yn_scores, dps_label, dpm_label, dpm_vec, mode="train"
+        self,
+        user_emb,
+        item_emb,
+        user,
+        pos_item,
+        neg_item,
+        yp_scores,
+        yn_scores,
+        dps_label,
+        dpm_label,
+        dpm_vec,
+        mode="train",
     ):
         # pair_loss = self.bpr_loss(yp_scores, yn_scores)
         # reg_loss = self.reg_loss(self.user_emb, self.item_emb[pos_item], self.item_emb[neg_item])
@@ -221,7 +238,7 @@ class FTDPRec(LightningModule):
         # NOTE: Auxiliary task 1 - Diversity Preference Scale (DPS)
         unique_users, first_indices = self._get_first_occurrence_indices(user)
         unique_dps_label = {k: v[first_indices] for k, v in dps_label.items()}
-        dps_scores = self.dps_module(self.user_emb, unique_users)
+        dps_scores = self.dps_module(user_emb, unique_users)
         dps_loss = self.dps_loss_fn(dps_scores, unique_dps_label)
         self.log_dict(
             {f"{mode}_dps_loss": self.mt_weights["dps_loss"] * dps_loss}, on_epoch=True, on_step=True
@@ -230,7 +247,7 @@ class FTDPRec(LightningModule):
         # NOTE: Auxiliary task 2 - Diversity Preference Regularization (DPR)
         unique_users, first_indices = self._get_first_occurrence_indices(user)
         unique_dps_label = {k: v[first_indices] for k, v in dps_label.items()}
-        dpr_scores = self.dpr_module(self.user_emb, user, self.item_emb, pos_item)
+        dpr_scores = self.dpr_module(user_emb, user, item_emb, pos_item)
         dpr_loss = self.dpr_loss_fn(dpr_scores, unique_dps_label)
         self.log_dict(
             {f"{mode}_dpr_loss": self.mt_weights["dpr_loss"] * dpr_loss}, on_epoch=True, on_step=True

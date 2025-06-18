@@ -12,6 +12,7 @@ class DPRegularizer(nn.Module):
     def __init__(
         self,
         emb_dim: int,
+        rel_dim: int = None,
         num_layers: int = 3,
         concat_emb: bool = True,
         features: List[str] = ["actor", "country", "director", "genre"],
@@ -31,7 +32,8 @@ class DPRegularizer(nn.Module):
 
         # NOTE: Project item embeddings into another space as feature representation
         # Define separate pipelines (linear layer) for each feature
-        self.feature_fcs = nn.ModuleDict({feature: nn.Linear(emb_dim, emb_dim) for feature in features})
+        self.rel_dim = rel_dim if rel_dim is not None else emb_dim
+        self.relation_fcs = nn.ModuleDict({feature: nn.Linear(emb_dim, self.rel_dim) for feature in features})
 
     def forward(
         self, user_emb: torch.Tensor, user_idx: torch.Tensor, item_emb: torch.Tensor, item_idx: torch.Tensor
@@ -52,8 +54,9 @@ class DPRegularizer(nn.Module):
         dpr_scores = {}
 
         for feature in self.features:
-            projected_item_emb = self.feature_fcs[feature](input_item_emb)  # (batch_size, emb_dim)
-            distance = torch.norm(input_user_emb - projected_item_emb, dim=-1)  # (batch_size,)
+            projected_user_emb = self.relation_fcs[feature](input_user_emb)
+            projected_item_emb = self.relation_fcs[feature](input_item_emb)  # (batch_size, emb_dim)
+            distance = torch.norm(projected_user_emb - projected_item_emb, dim=-1)  # (batch_size,)
             mean_feature_distance_by_user = segment_reduce(distance, user_idx, "mean", device)  # (n_users,)
             dpr_scores[f"{feature}_dpr"] = torch.sigmoid(mean_feature_distance_by_user).squeeze(-1)
 

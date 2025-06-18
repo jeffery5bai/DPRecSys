@@ -187,7 +187,6 @@ class KGATRecV2(LightningModule):
         reg_loss = self.reg_loss(self.user_emb, self.item_emb[pos_item], self.item_emb[neg_item])
         bpr_loss = pair_loss + self.reg_weight * reg_loss
         self.log("val_bpr_loss", bpr_loss, on_epoch=True, on_step=True)
-        
 
         # NOTE: Calculate KG loss for embedding regularization (TransR)
         kg_loss = self.calc_kg_loss(self.user_emb, self.item_emb, user, pos_item, neg_item)
@@ -195,19 +194,18 @@ class KGATRecV2(LightningModule):
 
         self.val_step_outputs.append({"bpr_loss": bpr_loss, "kg_loss": kg_loss})
 
-
     def on_validation_epoch_end(self):
-        outputs = self.val_step_outputs
-        all_bpr_loss = torch.cat([x["bpr_loss"] for x in outputs])
-        all_kg_loss = torch.cat([x["kg_loss"] for x in outputs])
-        avg_bpr_loss = all_bpr_loss.mean().item()
-        avg_kg_loss = all_kg_loss.mean().item()
+        pass
+        # outputs = self.val_step_outputs
+        # all_bpr_loss = torch.cat([x["bpr_loss"] for x in outputs])
+        # all_kg_loss = torch.cat([x["kg_loss"] for x in outputs])
+        # avg_bpr_loss = all_bpr_loss.mean().item()
+        # avg_kg_loss = all_kg_loss.mean().item()
 
-        self.val_results = {
-            "bpr_loss": avg_bpr_loss,
-            "kg_loss": avg_kg_loss,
-        }
-
+        # self.val_results = {
+        #     "bpr_loss": avg_bpr_loss,
+        #     "kg_loss": avg_kg_loss,
+        # }
 
     # NOTE: Testing/Inference
     def on_test_epoch_start(self):
