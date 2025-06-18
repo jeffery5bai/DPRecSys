@@ -20,3 +20,6 @@ test_checkpoints/
 mlflow_service/
 mlruns
 cache/
+
+# biproducts
+embeddings/

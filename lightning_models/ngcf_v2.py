@@ -152,8 +152,8 @@ class NGCFRecV2(LightningModule):
             "item": all_items.cpu(),
             "score": all_scores.cpu(),
             "label": all_labels.cpu(),
-            "user_emb": self.user_emb.cpu(),
-            "item_emb": self.item_emb.cpu(),
+            "user_emb": self.user_emb.detach().cpu(),
+            "item_emb": self.item_emb.detach().cpu(),
         }
 
         eval_df = self.evaluator.prepare_evaluation_data(self.test_results)
