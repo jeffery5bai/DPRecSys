@@ -23,3 +23,4 @@ cache/
 
 # biproducts
 embeddings/
+tmp/

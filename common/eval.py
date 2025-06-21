@@ -235,6 +235,49 @@ class Evaluator:
         hit_set = set(rec_items[:k]) & set(gt_items)
         return len(hit_set) / k
 
+    def process_eval_df(
+        self,
+        eval_df: pd.DataFrame,
+        feature_engineer: FeatureEngineer,
+        k: int = 100,
+        actor_k: int = 5,
+        rare_threshold: int = 5,
+    ) -> pd.DataFrame:
+        """
+        Process the evaluation DataFrame to ensure it has the correct structure.
+        Args:
+            eval_df (pd.DataFrame): DataFrame with columns ["user", "rec_items", "gt_items"].
+            feature_engineer (FeatureEngineer): Feature engineer instance to transform item features.
+            k (int): Number of top items to consider for recommendations.
+            actor_k (int): Number of actors to consider for each item.
+            rare_threshold (int): Threshold for filtering out rare items.
+
+        Returns:
+            pd.DataFrame: Processed DataFrame with encoded features ready for evaluation.
+        """
+        # NOTE: Explode items and slice to top K
+        df = eval_df.copy()
+        df["topk_items"] = df["rec_items"].apply(lambda x: x[:k])
+        exploded = df.explode("topk_items")
+        exploded = exploded.rename(columns={"user": USER_ID_FIELD, "topk_items": ITEM_ID_FIELD})
+        exploded = exploded[exploded[ITEM_ID_FIELD] != OOV_TOKEN]
+        exploded[ITEM_ID_FIELD] = exploded[ITEM_ID_FIELD].astype(int)
+        exploded = exploded[[USER_ID_FIELD, ITEM_ID_FIELD]]
+        print("exploded", exploded[USER_ID_FIELD].nunique())
+
+        # NOTE: Join item info
+        exploded = DataPreprocessor().join_item_features(
+            exploded,
+            actor_k=actor_k,
+            threshold=rare_threshold,
+        )
+
+        # NOTE: Encode features
+        encoded_df = feature_engineer.transform(exploded)
+        print("encoded", encoded_df[USER_ID_FIELD].nunique())
+
+        return encoded_df
+
     def evaluate_dpms_at_k(
         self,
         eval_df: pd.DataFrame,
@@ -248,26 +291,29 @@ class Evaluator:
         Evaluate the diversity preference matching score (DPMS) at K.
         eval_df: DataFrame with columns ["user", "rec_items", "gt_items"].
         """
-        # NOTE: Explode items and slice to top K
-        df = eval_df.copy()
-        df["topk_items"] = df["rec_items"].apply(lambda x: x[:k])
-        exploded = df.explode("topk_items")
-        exploded = exploded.rename(columns={"user": USER_ID_FIELD, "topk_items": ITEM_ID_FIELD})
-        exploded = exploded[exploded[ITEM_ID_FIELD] != OOV_TOKEN]
-        exploded[ITEM_ID_FIELD] = exploded[ITEM_ID_FIELD].astype(int)
-
-        print("exploded", exploded[USER_ID_FIELD].nunique())
-        # NOTE: Join item info
-        exploded = DataPreprocessor().join_item_features(
-            exploded,
-            actor_k=actor_k,
-            threshold=rare_threshold,
+        encoded_df = self.process_eval_df(
+            eval_df, feature_engineer, k=k, actor_k=actor_k, rare_threshold=rare_threshold
         )
+        # # NOTE: Explode items and slice to top K
+        # df = eval_df.copy()
+        # df["topk_items"] = df["rec_items"].apply(lambda x: x[:k])
+        # exploded = df.explode("topk_items")
+        # exploded = exploded.rename(columns={"user": USER_ID_FIELD, "topk_items": ITEM_ID_FIELD})
+        # exploded = exploded[exploded[ITEM_ID_FIELD] != OOV_TOKEN]
+        # exploded[ITEM_ID_FIELD] = exploded[ITEM_ID_FIELD].astype(int)
 
-        # NOTE: Encode features
-        encoded_df = feature_engineer.transform(exploded)
+        # print("exploded", exploded[USER_ID_FIELD].nunique())
+        # # NOTE: Join item info
+        # exploded = DataPreprocessor().join_item_features(
+        #     exploded,
+        #     actor_k=actor_k,
+        #     threshold=rare_threshold,
+        # )
 
-        print("encoded", encoded_df[USER_ID_FIELD].nunique())
+        # # NOTE: Encode features
+        # encoded_df = feature_engineer.transform(exploded)
+
+        # print("encoded", encoded_df[USER_ID_FIELD].nunique())
 
         # NOTE: Calculate Prediction DP vectors for each user
         encoded_df["rating"] = 1.0  # Set a dummy rating for the purpose of DPS calculation
