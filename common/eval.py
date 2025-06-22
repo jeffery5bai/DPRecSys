@@ -258,11 +258,13 @@ class Evaluator:
         # NOTE: Explode items and slice to top K
         df = eval_df.copy()
         df["topk_items"] = df["rec_items"].apply(lambda x: x[:k])
+        print("candidate item pool size:", k)
         exploded = df.explode("topk_items")
         exploded = exploded.rename(columns={"user": USER_ID_FIELD, "topk_items": ITEM_ID_FIELD})
+        exploded["rank"] = exploded.groupby(USER_ID_FIELD).cumcount() + 1
         exploded = exploded[exploded[ITEM_ID_FIELD] != OOV_TOKEN]
         exploded[ITEM_ID_FIELD] = exploded[ITEM_ID_FIELD].astype(int)
-        exploded = exploded[[USER_ID_FIELD, ITEM_ID_FIELD]]
+        exploded = exploded[[USER_ID_FIELD, ITEM_ID_FIELD, "rank"]]
         print("exploded", exploded[USER_ID_FIELD].nunique())
 
         # NOTE: Join item info
