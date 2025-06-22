@@ -1,3 +1,9 @@
+"""
+DPA-RS (Diversity Preference-Aware Recommender System) Reranker.
+Yin, K., Fang, X., Chen, B., & Sheng, O. R. L. (2023). Diversity preference-aware link recommendation for online social networks. 
+Information Systems Research, 34(4), 1398-1414.
+"""
+
 import os
 import sys
 
@@ -15,7 +21,7 @@ from post_processing.abstract_reranker import Reranker
 class DPA_RS(Reranker):
     """
     DPA-RS (Differentially Private Attribute-based Recommender System) Reranker.
-    This class implements the DPA-LR algorithm for reranking items based on user preferences and item attributes.
+    This class implements the DPA-RS algorithm for reranking items based on user preferences and item attributes.
     """
 
     def __init__(self, ground_truth_dps_df, **kwargs):
@@ -28,17 +34,17 @@ class DPA_RS(Reranker):
         super().__init__(**kwargs)
         self.ground_truth_dps_df: pd.DataFrame = ground_truth_dps_df
 
-    def dpalr_iterative_solver(
+    def dpars_iterative_solver(
         self,
         C_list: List[np.ndarray],
         d_list: List[np.ndarray],
         k: int,
-        epsilon: float = 1e-4,
+        epsilon: float = 1e-5,
         max_iter: int = 100,
         random_state: int = 42,
-    ):
+    ) -> np.ndarray:
         """
-        Full DPA-LR iterative solver for a single user.
+        Full DPA-RS iterative solver for a single user.
 
         Args:
             C_list (List[np.ndarray]): List of item attribute matrices (C_h), shape (attr_dim_h, m)
@@ -95,7 +101,7 @@ class DPA_RS(Reranker):
 
         return y
 
-    def _solve_dpa_lagrangian(self, C_list, d_list, beta, gamma, k):
+    def _solve_dpa_lagrangian(self, C_list, d_list, beta, gamma, k) -> np.ndarray:
         """
         Solve one iteration of the DPA-RS Lagrangian optimization problem (problem (4)).
 
@@ -109,6 +115,7 @@ class DPA_RS(Reranker):
         Returns:
             y_opt (np.ndarray): Optimal relaxed selection vector, shape (m,)
         """
+        RESIDUAL = 1e-4 # to avoid division by zero
         H = len(C_list)
         m = C_list[0].shape[1]  # number of candidate items
 
@@ -117,24 +124,30 @@ class DPA_RS(Reranker):
 
         objective_terms = []
         for h in range(H):
-            d_h_bar = cp.Constant(d_list[h] / np.linalg.norm(d_list[h]))
+            d_h_bar = cp.Constant(d_list[h] / max(np.linalg.norm(d_list[h]), RESIDUAL))  
             C_h = cp.Constant(C_list[h])
             beta_h = cp.Constant(beta[h])
             gamma_h = cp.Constant(gamma[h])
 
             Cy = C_h @ y
-            norm_Cy = cp.norm(Cy, 2)
+            norm_Cy = cp.maximum(cp.norm(Cy, 2), RESIDUAL)
             dot_product = cp.matmul(d_h_bar, Cy)
 
             term = gamma_h * (dot_product - beta_h * norm_Cy)
             objective_terms.append(term)
 
-        objective = cp.Maximize(cp.sum(objective_terms))
+        # Add small L2 regularization to avoid flatness
+        regularizer = RESIDUAL * cp.norm(y, 2)
 
+        # NOTE: Objective function and constraints
+        objective = cp.Maximize(cp.sum(objective_terms) - regularizer) # Eq (4)
         constraints = [cp.sum(y) == k, y >= 0, y <= 1]
 
         problem = cp.Problem(objective, constraints)
-        problem.solve(cp.ECOS, verbose=True)
+        try:
+            problem.solve(solver=cp.ECOS)
+        except cp.SolverError:
+            problem.solve(solver=cp.SCS)
 
         if problem.status not in ["optimal", "optimal_inaccurate"]:
             raise ValueError(f"CVXPY solver failed: {problem.status}")
@@ -176,14 +189,15 @@ class DPA_RS(Reranker):
     def rerank(self, top_k: int = 20, max_iter: int = 100, random_state: int = 42) -> pd.DataFrame:
 
         """
-        Apply DPA-LR re-ranking to each user's candidate items.
+        Apply DPA-RS re-ranking to each user's candidate items.
 
         Args:
             top_k (int): Number of items to recommend
+            max_iter (int): Maximum number of iterations for the DPA-RS solver
+            random_state (int): Random seed for reproducibility
 
         Returns:
             pd.DataFrame: New re-ranked recommendations per user
-                        Columns = [user, reranked_items]
         """
 
         # NOTE: this dataframe has been encoded and contains all necessary features
@@ -193,20 +207,20 @@ class DPA_RS(Reranker):
         results = []
         print("Reranking items for each user...")
         for user_id, user_df in tqdm(df.groupby("userID"), desc="Reranking users"):
-            # Build C matrix: shape (num_genres, num_items)
+            # Build C matrix: shape (feat_dim, num_items)
             C = [
-                np.stack(user_df[f"{feat}_vec"].to_numpy()).T  # shape (dim, num_items)
+                np.stack(user_df[f"{feat}_vec"].to_numpy()).T  # shape (feat_dim, num_items)
                 for feat in self.feature_fields
             ]
 
             # User preference vector
             d = [
-                user_df[f"{feat}_gt"].values[0]  # shape (dim,)
+                user_df[f"{feat}_gt"].values[0]  # shape (feat_dim,)
                 for feat in self.feature_fields
             ]
 
-            # Solve relaxed DPA-LR
-            y = self.dpalr_iterative_solver(C_list=C, d_list=d, k=top_k, max_iter=max_iter, random_state=random_state)
+            # Solve relaxed DPA-RS
+            y = self.dpars_iterative_solver(C_list=C, d_list=d, k=top_k, max_iter=max_iter, random_state=random_state)
 
             # Top-k item indices in descending score
             top_k_indices = np.argsort(-y)[:top_k]

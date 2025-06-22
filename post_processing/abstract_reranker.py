@@ -46,7 +46,7 @@ class Reranker:
             pd.DataFrame: Preprocessed DataFrame ready for reranking.
         """
         encoded_df = self.evaluator.process_eval_df(
-            eval_df=self.eval_df, feature_engineer=self.feature_engineer, k=self.m
+            eval_df=self.eval_df, feature_engineer=self.feature_engineer, k=self.m,
         )
         return encoded_df
 
