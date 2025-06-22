@@ -14,7 +14,7 @@ import numpy as np
 import pandas as pd
 import torch
 from pytorch_lightning import seed_everything
-from torch_geometric.data import Data
+from tqdm import tqdm
 
 # constant
 MOVIELENS_DATA_DIR = "../datasets/hetrec2011-movielens-2k-v2/user_ratedmovies.dat"
@@ -48,29 +48,6 @@ IS_LIST_FEATURES = [True, False, False, True]
 # TODO: change this to assign other dir for user/item id mappling
 USER_MAPPING_DIR = "../datasets/userid_mapping.csv"
 ITEM_MAPPING_DIR = "../datasets/itemid_mapping.csv"
-
-
-"""
-Toolkits:
-- `set_seed`: Set random seed for reproducibility.
-- `seed_worker`: Set random seed for each worker in DataLoader.
-- `DataPreprocessor`: Class for data preprocessing.
-    - `load_and_process_df`: Load and process the dataset.
-        - `_get_illegal_ids_by_inter_num`: Get illegal ids by interaction number.
-        - `_filter_by_threshold`: Filter out user/item with interactions less than min threshold.
-    - `join_item_features`: Join item features (actor, country, director, genre) to the DataFrame.
-        - `_extract_top_k_actors`: Extract the top K actors for each movie.
-        - `_extract_country`: Extract the country information from the country data file.
-        - `_extract_director`: Extract the director information from the director data file.
-        - `_extract_genres`: Extract the genre information from the genre data file.
-- `FeatureEngineer`: Class for feature engineering.
-    - `fit_transform`: Fit and transform categorical features to create a mapping from vocab to index.
-    - `fit`: Fit categorical features.
-        - `_fit_re_index`: Re-index the user and item mapping after joining and filtering.
-        - `_fit_category_feature`: Fit categorical features to create a mapping from vocab to index.
-        - `_get_idx2vocab`: Get idx2vocab mapping.
-    - `transform`: Encode categorical features.
-"""
 
 
 def set_seed(seed=RANDOM_SEED):
@@ -453,16 +430,6 @@ class DataPreprocessor:
             threshold=threshold,
         )
 
-        # return (
-        #     genre_df.groupby("movieID")
-        #     .apply(
-        #         lambda df: (df.head(K)["genre"].tolist() + [self.pad_token] * max(0, K - len(df)))[
-        #             :K
-        #         ]  # ensure no longer than K
-        #     )
-        #     .reset_index(name="genre")
-        # )
-
     def _mark_rare_categories(
         self,
         df: pd.DataFrame,
@@ -745,3 +712,71 @@ class FeatureEngineer:
             df = df.drop(columns=[col])
 
         return df
+
+
+class DiversityEvaluator:
+    # === 1. Dedup the table based on movieID ===
+    def deduplicate_movies(self, df: pd.DataFrame) -> pd.DataFrame:
+        return (
+            df.drop_duplicates(subset="movieID")
+            .sort_values(by="movieID")
+            .reset_index(drop=True)[[ITEM_ID_FIELD] + FEATURE_IDX_FIELD]
+        )
+
+    # === 2. Exclude 0s and 1s in each attribute (actorID_idx, genre_idx, ...) ===
+    def clean_attributes(self, row, attr_cols):
+        d = {}
+        for col in attr_cols:
+            z = np.array(row[col]).tolist()
+            if not isinstance(z, list):
+                z = [z]
+            d[col] = sorted(set(z) - {0, 1})
+        return d
+
+    # === 3. Compute pairwise Jaccard similarity and average across attributes ===
+    def jaccard_similarity(self, set1, set2):
+        if not set1 and not set2:
+            return 0.0
+        intersection = len(set1 & set2)
+        union = len(set1 | set2)
+        return intersection / union if union != 0 else 0.0
+
+    def compute_similarity_matrix(self, raw_df, attr_cols=FEATURE_IDX_FIELD):
+        """
+        Args:
+            raw_df: takes encoded_train_df
+            attr_cols: encoded feature idx column names
+
+        Return:
+            sim_matrix: pair-wise jaccard similarity table, can be indexed by movieID
+        """
+
+        df = self.deduplicate_movies(raw_df)
+        print(df.head())
+        movie_ids = sorted(df["movieID"].unique().tolist())
+        n = len(movie_ids)
+        print("Number of movie idx", n + 1)
+
+        # Preprocess attributes into dict: movieID -> {attr_col: set}
+        attr_data = {row["movieID"]: self.clean_attributes(row, attr_cols) for _, row in df.iterrows()}
+
+        # Initialize similarity matrix (+1 for oov token)
+        sim_matrix = np.zeros((n + 1, n + 1), dtype=np.float32)
+
+        for i in tqdm(range(n)):
+            for j in range(i + 1, n):
+                id_i, id_j = movie_ids[i], movie_ids[j]
+                sims = []
+                for attr in attr_cols:
+                    set_i = set(attr_data[id_i][attr])
+                    set_j = set(attr_data[id_j][attr])
+                    sims.append(self.jaccard_similarity(set_i, set_j))
+
+                avg_sim = np.mean(sims)
+                sim_matrix[i, j] = avg_sim
+                sim_matrix[j, i] = avg_sim  # symmetric
+
+        np.fill_diagonal(sim_matrix, 1.0)
+        sim_matrix[-1, :] = 1
+        sim_matrix[:, -1] = 1  # -1 for oov (give largest value)
+        return sim_matrix
