@@ -1,8 +1,6 @@
 import gc
 import os
-import random
 import sys
-from collections import Counter
 from typing import Any, Dict, List, Set, Tuple, Union
 
 import numpy as np
@@ -11,7 +9,7 @@ import torch
 from common.utils import DataPreprocessor, FeatureEngineer
 from pytorch_lightning import seed_everything
 from sklearn.metrics.pairwise import cosine_similarity
-from torch_geometric.data import Data
+from sklearn.preprocessing import MinMaxScaler
 from tqdm import tqdm
 
 sys.path.append(os.path.abspath(os.path.join(os.getcwd(), "..")))
@@ -58,6 +56,7 @@ class Evaluator:
         df_with_encoded_features: pd.DataFrame,
         feature_vocab2idx: Dict[str, int],
         normalized: bool = True,
+        rescale: bool = True,
     ) -> pd.DataFrame:
         """
         Calculate the diversity preference scale (DPS) for each user based on their ratings and side information.
@@ -98,7 +97,14 @@ class Evaluator:
 
             user_profiles.append(user_profile)
 
-        return pd.DataFrame(user_profiles)
+        # NOTE: Re-scale the DPS values exactly to [0, 1]
+        df = pd.DataFrame(user_profiles)
+        if rescale:
+            rescale_features = [f"{feat}_dps" for feat in FEATURE_FIELD]
+            scaler = MinMaxScaler()
+            df[rescale_features] = scaler.fit_transform(df[rescale_features])
+
+        return df
 
     def _indices_to_multi_hot(self, indices: Union[int, List[int]], cardinality: int) -> np.ndarray:
         vec = np.zeros(cardinality, dtype=np.int32)

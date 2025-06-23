@@ -96,7 +96,7 @@ class FTDPRec(LightningModule):
         self.dpm_weights = self.dpm_loss_fn.dpm_weights
 
         # NOTE: Loss scaling module
-        # self.l2_regularizer = L2Loss()
+        self.l2_regularizer = L2Loss()
         self.loss_scaling_module = LogScaleLoss()
         self.ema_normalizer = EMALossNormalizer(static_weight=1.0, ema_decay=0.1)
 
@@ -253,18 +253,18 @@ class FTDPRec(LightningModule):
             {f"{mode}_dpm_loss": self.mt_weights["dpm_loss"] * dpm_loss}, on_epoch=True, on_step=True
         )
 
-        # # NOTE: L2 regularization loss
-        # l2_loss = self.l2_regularizer(*self.dps_module.projection_fcs.values(), *self.dpr_module.relation_fcs.values())
-        # self.log_dict(
-        #     {f"{mode}_l2_loss": self.mt_weights["l2_loss"] * l2_loss}, on_epoch=True, on_step=True
-        # )
+        # NOTE: L2 regularization loss
+        l2_loss = self.l2_regularizer(
+            *self.dps_module.projection_fcs.values(), *self.dpr_module.relation_fcs.values()
+        )
+        self.log_dict({f"{mode}_l2_loss": self.mt_weights["l2_loss"] * l2_loss}, on_epoch=True, on_step=True)
 
         return {
             # "bpr_loss": bpr_loss,
             "dps_loss": dps_loss,
             "dpr_loss": dpr_loss,
             "dpm_loss": dpm_loss,
-            # "l2_loss": l2_loss,
+            "l2_loss": l2_loss,
         }
 
     # NOTE: Validation
