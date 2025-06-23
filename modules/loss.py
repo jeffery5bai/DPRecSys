@@ -1,6 +1,12 @@
+import os
+import sys
+
+sys.path.append(os.path.abspath(os.path.join(os.getcwd(), "..")))
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from common.init import xavier_uniform_initialization
 
 
 class BPRLoss(nn.Module):
@@ -48,14 +54,30 @@ class EmbLoss(nn.Module):
 
 
 class L2Loss(nn.Module):
+    """L2Loss, regularization on nn.Module"""
+
     def __init__(self):
         super().__init__()
 
-    def forward(self, *embeddings):
-        l2_loss = torch.zeros(1).to(embeddings[-1].device)
-        for embedding in embeddings:
-            l2_loss += torch.sum(embedding**2) * 0.5
-        return l2_loss
+    def forward(self, *modules: nn.Module):
+
+        device = None
+        l2_loss = 0.0
+
+        for module in modules:
+            if not isinstance(module, nn.Module):
+                raise TypeError(f"L2Loss only supports nn.Module inputs, got {type(module)}")
+
+            for param in module.parameters():
+                if param.requires_grad:
+                    if device is None:
+                        device = param.device
+                    l2_loss += 0.5 * torch.sum(param**2)  # simplified for smoother gradients
+
+        if device is None:
+            device = torch.device("cpu")
+
+        return l2_loss.to(device)
 
 
 class DPSLoss(nn.Module):
@@ -166,7 +188,7 @@ class KLDivergenceLoss(nn.Module):
                 "genre_pd": 0.25,
             }
         )
-        self.loss_fn = nn.KLDivLoss(reduction='batchmean')
+        self.loss_fn = nn.KLDivLoss(reduction="batchmean")
 
     def forward(self, pred, target):
         device = next(iter(pred.values())).device
@@ -178,5 +200,61 @@ class KLDivergenceLoss(nn.Module):
 
                 loss = self.loss_fn(pred_log_prob, target_prob)
                 dpm_losses.append(weight * loss)
+
+        return torch.stack(dpm_losses).sum() if dpm_losses else torch.tensor(0.0, device=device)
+
+
+class PersonalizedMatchingLoss(nn.Module):
+    """KL Divergence Loss for 2D probability distributions.
+
+    Each input tensor is expected to have shape (N, D), where each row is a distribution.
+    The inputs are first normalized so that each row sums to 1.
+
+    Forward:
+        - pred: (N, D) tensor of raw predicted probabilities
+        - target: (N, D) tensor of raw target probabilities
+    Returns:
+        - scalar loss (mean over the batch)
+
+    Example::
+
+        >>> loss_fn = KLDivergenceLoss()
+        >>> P = torch.rand(3, 5, requires_grad=True)
+        >>> Q = torch.rand(3, 5)
+        >>> loss = loss_fn(P, Q)
+        >>> loss.backward()
+    """
+
+    def __init__(self, num_users, attr_keys=None, dpm_weights=None):
+        super().__init__()
+        self.attr_keys = attr_keys or ["actor_pd", "country_pd", "director_pd", "genre_pd"]
+        self.num_users = num_users
+        self.num_attrs = len(self.attr_keys)
+
+        self.user_attr_weights = nn.Parameter(torch.empty(num_users, self.num_attrs))
+        xavier_uniform_initialization(self.user_attr_weights)
+        self.loss_fn = nn.KLDivLoss(reduction="none")
+
+    def forward(self, pred, target, user_idx):
+        device = user_idx.device
+        N = user_idx.size(0)
+
+        dpm_losses = []
+        for i, key in enumerate(self.attr_keys):
+            if key in pred and key in target:
+                pred_log_prob = F.log_softmax(pred[key], dim=1)
+                target_prob = F.softmax(target[key], dim=1)
+
+                # Get personalized weights for each user in the batch
+                weights = self.user_attr_weights[user_idx, i]  # Shape: (N,)
+
+                # Compute individual KL losses for each user
+                per_sample_loss = self.loss_fn(pred_log_prob, target_prob).sum(dim=1)  # (N,)
+
+                # Apply personalized weights
+                weighted_loss = per_sample_loss * weights
+
+                # Mean over batch
+                dpm_losses.append(weighted_loss.mean())
 
         return torch.stack(dpm_losses).sum() if dpm_losses else torch.tensor(0.0, device=device)

@@ -10,7 +10,7 @@ from modules.dpm_modules import DPMatcher
 from modules.dpr_modules import DPRegularizer
 from modules.dps_modules import DPSPredictor
 from modules.emb_modules import EmbeddingWrapper
-from modules.loss import BPRLoss, DPRLoss, DPSLoss, EmbLoss, KLDivergenceLoss
+from modules.loss import BPRLoss, DPRLoss, DPSLoss, EmbLoss, KLDivergenceLoss, L2Loss
 from modules.loss_weight_modules import EMALossNormalizer, LogScaleLoss
 from pytorch_lightning import LightningModule
 
@@ -96,6 +96,7 @@ class FTDPRec(LightningModule):
         self.dpm_weights = self.dpm_loss_fn.dpm_weights
 
         # NOTE: Loss scaling module
+        # self.l2_regularizer = L2Loss()
         self.loss_scaling_module = LogScaleLoss()
         self.ema_normalizer = EMALossNormalizer(static_weight=1.0, ema_decay=0.1)
 
@@ -162,7 +163,7 @@ class FTDPRec(LightningModule):
         #     on_step=True,
         # )
 
-        dps_loss, dpr_loss, dpm_loss = self.task_forward(
+        loss_dict = self.task_forward(
             user_emb,
             item_emb,
             user,
@@ -177,20 +178,10 @@ class FTDPRec(LightningModule):
         )
 
         # TODO: weighing the main task and auxiliary task losses
-        total_loss = (
-            # self.mt_weights["bpr_loss"] * bpr_loss
-            self.mt_weights["dps_loss"] * dps_loss
-            + self.mt_weights["dpr_loss"] * dpr_loss
-            + self.mt_weights["dpm_loss"] * dpm_loss
-        )
+        total_loss = 0
+        for loss_name, loss in loss_dict.items():
+            total_loss += self.mt_weights[loss_name] * loss
         self.log_dict({"train_loss": total_loss}, on_epoch=True, on_step=True)
-
-        loss_dict = {
-            # "bpr_loss": bpr_loss,
-            "dps_loss": dps_loss,
-            "dpr_loss": dpr_loss,
-            "dpm_loss": dpm_loss,
-        }
 
         # NOTE: Apply loss scaling
         if self.rescale_method is not None:
@@ -262,7 +253,19 @@ class FTDPRec(LightningModule):
             {f"{mode}_dpm_loss": self.mt_weights["dpm_loss"] * dpm_loss}, on_epoch=True, on_step=True
         )
 
-        return dps_loss, dpr_loss, dpm_loss
+        # # NOTE: L2 regularization loss
+        # l2_loss = self.l2_regularizer(*self.dps_module.projection_fcs.values(), *self.dpr_module.relation_fcs.values())
+        # self.log_dict(
+        #     {f"{mode}_l2_loss": self.mt_weights["l2_loss"] * l2_loss}, on_epoch=True, on_step=True
+        # )
+
+        return {
+            # "bpr_loss": bpr_loss,
+            "dps_loss": dps_loss,
+            "dpr_loss": dpr_loss,
+            "dpm_loss": dpm_loss,
+            # "l2_loss": l2_loss,
+        }
 
     # NOTE: Validation
     def on_validation_epoch_start(self):
