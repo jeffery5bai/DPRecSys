@@ -10,7 +10,15 @@ from modules.dpm_modules import DPMatcher
 from modules.dpr_modules import DPRegularizer
 from modules.dps_modules import DPSPredictor
 from modules.emb_modules import EmbeddingWrapper
-from modules.loss import BPRLoss, DPRLoss, DPSLoss, EmbLoss, KLDivergenceLoss, L2Loss
+from modules.loss import (
+    BPRLoss,
+    DPRLoss,
+    DPSLoss,
+    EmbLoss,
+    KLDivergenceLoss,
+    L2Loss,
+    PersonalizedKLDivergenceLoss,
+)
 from modules.loss_weight_modules import EMALossNormalizer, LogScaleLoss
 from pytorch_lightning import LightningModule
 
@@ -93,6 +101,7 @@ class FTDPRec(LightningModule):
         # NOTE: Auxiliary task 3 - Diversity Preference Matching (DPM)
         self.dpm_module = DPMatcher()
         self.dpm_loss_fn = KLDivergenceLoss(dpm_weights=dpm_weights)
+        # self.dpm_loss_fn = PersonalizedKLDivergenceLoss(num_users=user_emb_tensor.size(0), use_temperature=True, init_temperature=0.5) # TODO: remove this in final version
         self.dpm_weights = self.dpm_loss_fn.dpm_weights
 
         # NOTE: Loss scaling module
@@ -249,6 +258,7 @@ class FTDPRec(LightningModule):
         unique_dpm_label = {k: v[first_indices] for k, v in dpm_label.items()}
         dpm_prob_dist = self.dpm_module(yp_scores, user, dpm_vec)
         dpm_loss = self.dpm_loss_fn(dpm_prob_dist, unique_dpm_label)
+        # dpm_loss = self.dpm_loss_fn(dpm_prob_dist, unique_dpm_label, unique_users) # TODO: remove this in final version
         self.log_dict(
             {f"{mode}_dpm_loss": self.mt_weights["dpm_loss"] * dpm_loss}, on_epoch=True, on_step=True
         )

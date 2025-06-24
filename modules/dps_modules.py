@@ -26,7 +26,9 @@ class DPSPredictor(nn.Module):
         emb_dim = emb_dim * (num_layers + 1) if concat_emb else emb_dim
 
         # Define a separate pipeline (linear layer) for each feature
-        self.projection_fcs = nn.ModuleDict({feature: nn.Linear(emb_dim, 1) for feature in features})
+        self.projection_fcs = nn.ModuleDict(
+            {feature: nn.Linear(emb_dim, 1, bias=False) for feature in features}
+        )
 
     def forward(self, user_emb: torch.Tensor, user_idx: torch.Tensor) -> dict:
         """

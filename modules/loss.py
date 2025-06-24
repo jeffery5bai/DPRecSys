@@ -204,57 +204,60 @@ class KLDivergenceLoss(nn.Module):
         return torch.stack(dpm_losses).sum() if dpm_losses else torch.tensor(0.0, device=device)
 
 
-class PersonalizedMatchingLoss(nn.Module):
-    """KL Divergence Loss for 2D probability distributions.
-
-    Each input tensor is expected to have shape (N, D), where each row is a distribution.
-    The inputs are first normalized so that each row sums to 1.
-
-    Forward:
-        - pred: (N, D) tensor of raw predicted probabilities
-        - target: (N, D) tensor of raw target probabilities
-    Returns:
-        - scalar loss (mean over the batch)
-
-    Example::
-
-        >>> loss_fn = KLDivergenceLoss()
-        >>> P = torch.rand(3, 5, requires_grad=True)
-        >>> Q = torch.rand(3, 5)
-        >>> loss = loss_fn(P, Q)
-        >>> loss.backward()
+class PersonalizedKLDivergenceLoss(nn.Module):
+    """
+    [Deprecated] this feature is not useful based on experiment results.
+    Trainable per-user per-attribute KL divergence loss with softmax-normalized gating weights.
+    Each user learns how much to weigh each attribute-specific KL loss.
     """
 
-    def __init__(self, num_users, attr_keys=None, dpm_weights=None):
+    def __init__(self, num_users, use_temperature=False, init_temperature=1.0):
         super().__init__()
-        self.attr_keys = attr_keys or ["actor_pd", "country_pd", "director_pd", "genre_pd"]
-        self.num_users = num_users
+        self.attr_keys = ["actor_pd", "country_pd", "director_pd", "genre_pd"]
         self.num_attrs = len(self.attr_keys)
+        self.num_users = num_users
 
-        self.user_attr_weights = nn.Parameter(torch.empty(num_users, self.num_attrs))
-        xavier_uniform_initialization(self.user_attr_weights)
+        # Trainable unnormalized weights (raw logits), shape: (num_users, num_attrs)
+        self.raw_weights = nn.Parameter(torch.zeros(num_users, self.num_attrs))
+
+        # Optional trainable temperature (shared across users/attributes)
+        if use_temperature:
+            self.temperature = nn.Parameter(torch.tensor(init_temperature))
+        else:
+            self.register_buffer("temperature", torch.tensor(1.0))  # constant
+
+        # KL Divergence loss (expects log-softmax input)
         self.loss_fn = nn.KLDivLoss(reduction="none")
 
     def forward(self, pred, target, user_idx):
-        device = user_idx.device
-        N = user_idx.size(0)
+        """
+        pred, target: dict[str, Tensor] of shape (batch_user_size, dim)
+        user_indices: LongTensor of shape (batch_user_size,)
+        """
+        batch_user_size = user_idx.size(0)
 
-        dpm_losses = []
+        # Extract raw weights for the current batch
+        raw_w = self.raw_weights[user_idx]  # (batch_user_size, num_attrs)
+
+        # Normalize via softmax with temperature
+        weights = F.softmax(raw_w / self.temperature.clamp(min=1e-5), dim=1)  # (batch_user_size, num_attrs)
+
+        # For each attribute, compute weighted KL loss
+        total_loss = 0.0
         for i, key in enumerate(self.attr_keys):
-            if key in pred and key in target:
-                pred_log_prob = F.log_softmax(pred[key], dim=1)
-                target_prob = F.softmax(target[key], dim=1)
+            if key not in pred or key not in target:
+                continue
+            pred_log_prob = F.log_softmax(pred[key], dim=1)
+            target_prob = F.softmax(target[key], dim=1)
 
-                # Get personalized weights for each user in the batch
-                weights = self.user_attr_weights[user_idx, i]  # Shape: (N,)
+            # Individual KL loss
+            kl_loss = self.loss_fn(pred_log_prob, target_prob)
+            kl_loss = kl_loss.sum(dim=1)
 
-                # Compute individual KL losses for each user
-                per_sample_loss = self.loss_fn(pred_log_prob, target_prob).sum(dim=1)  # (N,)
+            # Weight each sample's loss by the corresponding attribute weight
+            weighted_loss = weights[:, i] * kl_loss  # (batch_user_size,)
 
-                # Apply personalized weights
-                weighted_loss = per_sample_loss * weights
+            # Sum over batch
+            total_loss += weighted_loss.sum()
 
-                # Mean over batch
-                dpm_losses.append(weighted_loss.mean())
-
-        return torch.stack(dpm_losses).sum() if dpm_losses else torch.tensor(0.0, device=device)
+        return total_loss / batch_user_size

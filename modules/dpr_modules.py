@@ -33,7 +33,9 @@ class DPRegularizer(nn.Module):
         # NOTE: Project item embeddings into another space as feature representation
         # Define separate pipelines (linear layer) for each feature
         self.rel_dim = rel_dim if rel_dim is not None else emb_dim
-        self.relation_fcs = nn.ModuleDict({feature: nn.Linear(emb_dim, self.rel_dim) for feature in features})
+        self.relation_fcs = nn.ModuleDict(
+            {feature: nn.Linear(emb_dim, self.rel_dim, bias=False) for feature in features}
+        )
 
     def forward(
         self, user_emb: torch.Tensor, user_idx: torch.Tensor, item_emb: torch.Tensor, item_idx: torch.Tensor
