@@ -6,7 +6,7 @@ import sys
 sys.path.append(os.path.abspath(os.path.join(os.getcwd(), "..")))
 
 import torch
-from lightning_models.ngcf import NGCFRec
+from DPRecSys.lightning_models.deprecated.ngcf import NGCFRec
 from modules.dpr_modules import DPRegularizer
 from modules.dps_modules import DPSPredictor
 from modules.loss import DPRLoss, DPSLoss

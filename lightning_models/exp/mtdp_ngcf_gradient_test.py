@@ -5,7 +5,7 @@ sys.path.append(os.path.abspath(os.path.join(os.getcwd(), "../..")))
 
 import torch
 import torch.nn.functional as F
-from lightning_models.ngcf import NGCFRec
+from DPRecSys.lightning_models.deprecated.ngcf import NGCFRec
 from modules.dpr_modules import DPRegularizer
 from modules.dps_modules import DPSPredictor
 from modules.dpm_modules import DPMatcher
