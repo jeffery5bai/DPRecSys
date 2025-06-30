@@ -201,6 +201,57 @@ class ExperimentDataPreprocessor:
         )
         return triplet_df
 
+    def prepare_finetune_df(self, df: pd.DataFrame, seed=RANDOM_SEED) -> pd.DataFrame:
+        """
+        Prepare the DataFrame for finetuning.
+        Args:
+            df (pd.DataFrame): The DataFrame containing user-item interactions with encoded features.
+        Returns:
+            pd.DataFrame: A DataFrame containing user-item pairs with ratings and encoded features.
+        """
+        # NOTE: Preserve item features and join after sampling
+        item_feature_df = (
+            df[[ITEM_ID_FIELD, *FEATURE_IDX_FIELD]].drop_duplicates([ITEM_ID_FIELD], ignore_index=True).copy()
+        )
+
+        df = df.loc[:, [USER_ID_FIELD, ITEM_ID_FIELD, LABEL_FIELD]].copy()
+        all_items = df[ITEM_ID_FIELD].unique()
+
+        result_dfs = []
+        np.random.seed(seed)
+        for user_id, user_df in df.groupby(USER_ID_FIELD):
+            user_pos_items = user_df.loc[user_df[LABEL_FIELD] == 1, ITEM_ID_FIELD].unique()
+            user_neg_items = user_df.loc[user_df[LABEL_FIELD] == 0, ITEM_ID_FIELD].unique()
+            n_pos = len(user_pos_items)
+            n_neg = len(user_neg_items)
+            if n_neg >= n_pos:
+                sampled_neg_items = np.random.choice(user_neg_items, size=n_pos, replace=False)
+            else:
+                unseen_items = np.setdiff1d(all_items, np.union1d(user_pos_items, user_neg_items))
+                sampled_items = np.random.choice(unseen_items, size=(n_pos - n_neg), replace=False)
+                sampled_neg_items = np.concatenate([user_neg_items, sampled_items])
+
+            # NOTE: Create negative samples
+            negative_df = pd.DataFrame(
+                {
+                    USER_ID_FIELD: user_id,
+                    ITEM_ID_FIELD: sampled_neg_items,
+                    LABEL_FIELD: 0,
+                }
+            )
+
+            sampled_df = pd.concat([user_df.loc[user_df[LABEL_FIELD] == 1], negative_df], ignore_index=True)
+
+            result_dfs.append(sampled_df)
+
+        final_df = pd.concat(result_dfs, ignore_index=True)
+        final_df = final_df.merge(item_feature_df, on=ITEM_ID_FIELD, how="inner")
+        print("Finetune DataFrame:")
+        print(f"Num of interactions: {len(final_df)}")
+        print("Check target label distribution:")
+        print(final_df[LABEL_FIELD].value_counts(normalize=True))
+        return final_df
+
     def prepare_prediction_df(
         self, df: pd.DataFrame, seen_df: pd.DataFrame, K: int = 500, seed=RANDOM_SEED
     ) -> pd.DataFrame:

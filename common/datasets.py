@@ -150,6 +150,7 @@ class UserItemPairDataset(Dataset):
         Args:
             df (pd.DataFrame): with columns ['userID', 'movieID', 'label'] (optional: encoded features)
         """
+        self.features = ["actor", "country", "director", "genre"]
         self.user_ids = torch.tensor(df[USER_ID_FIELD].values, dtype=torch.long)
         self.item_ids = torch.tensor(df[ITEM_ID_FIELD].values, dtype=torch.long)
         self.labels = torch.tensor(df[LABEL_FIELD].values, dtype=torch.float)
@@ -201,6 +202,25 @@ class UserItemPairDataset(Dataset):
             else None
         )
 
+        # NOTE: item features multihot encoding
+        for feat, feature_field in zip(self.features, FEATURE_FIELD):
+            vec_attr_name, vec_col_name = f"{feat}_vec", f"{feature_field}_vec"
+            wvec_attr_name, wvec_col_name = f"{feat}_wvec", f"{feature_field}_wvec"
+            setattr(
+                self,
+                vec_attr_name,
+                (torch.from_numpy(np.stack(df[vec_col_name].values)) if vec_col_name in df.columns else None),
+            )
+            setattr(
+                self,
+                wvec_attr_name,
+                (
+                    torch.from_numpy(np.stack(df[wvec_col_name].values))
+                    if wvec_col_name in df.columns
+                    else None
+                ),
+            )
+
     def __len__(self):
         return len(self.labels)
 
@@ -221,8 +241,17 @@ class UserItemPairDataset(Dataset):
             "director_dps": self.director_dps,
             "genre_dps": self.genre_dps,
         }
-
         batch_data.update({name: dps[idx] for name, dps in dps_attrs.items() if dps is not None})
+
+        item_vec_attrs = {
+            f"{feature}_vec": getattr(self, f"{feature}_vec", None) for feature in self.features
+        }
+        batch_data.update({name: vec[idx] for name, vec in item_vec_attrs.items() if vec is not None})
+
+        item_wvec_attrs = {
+            f"{feature}_wvec": getattr(self, f"{feature}_wvec", None) for feature in self.features
+        }
+        batch_data.update({name: wvec[idx] for name, wvec in item_wvec_attrs.items() if wvec is not None})
 
         return batch_data
 

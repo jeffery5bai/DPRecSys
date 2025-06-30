@@ -134,6 +134,8 @@ class FTDPRec(LightningModule):
 
     def training_step(self, batch, batch_idx):
         user, pos_item, neg_item = batch["user"], batch["pos_item"], batch["neg_item"]
+        # user, item = batch["user"], batch["item"] # TODO: dataset exp (failed to improve performance)
+
         dps_label = {
             "actor_dps": batch["actor_dps"],
             "country_dps": batch["country_dps"],
