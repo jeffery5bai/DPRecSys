@@ -201,41 +201,50 @@ class ExperimentDataPreprocessor:
         )
         return triplet_df
 
-    def prepare_prediction_df(self, df: pd.DataFrame, K: int = 500, seed=RANDOM_SEED) -> pd.DataFrame:
+    def prepare_prediction_df(
+        self, df: pd.DataFrame, seen_df: pd.DataFrame, K: int = 500, seed=RANDOM_SEED
+    ) -> pd.DataFrame:
         """
         Prepare the prediction DataFrame for the test set.
         Performs negative sampling for users who have less than K interactions.
         Args:
             df (pd.DataFrame): The DataFrame containing user-item interactions.
+            seen_df (pd.DataFrame): The DataFrame containing already seen user-item interactions.
             K (int): The number of items to sample for each user.
             seed (int): The random seed for reproducibility.
         Returns:
             pd.DataFrame: A DataFrame containing user-item pairs with ratings.
         """
-        # NOTE: Reserve item features and join after sampling
+        # NOTE: Preserve item features and join after sampling
         item_feature_df = (
-            df[[ITEM_ID_FIELD, *FEATURE_IDX_FIELD]].drop_duplicates([ITEM_ID_FIELD], ignore_index=True).copy()
+            pd.concat([df, seen_df], ignore_index=True)[[ITEM_ID_FIELD, *FEATURE_IDX_FIELD]]
+            .drop_duplicates([ITEM_ID_FIELD], ignore_index=True)
+            .copy()
         )
 
         df = df.loc[:, [USER_ID_FIELD, ITEM_ID_FIELD, LABEL_FIELD]].copy()
         n_users = df[USER_ID_FIELD].nunique()
-        n_items = df[ITEM_ID_FIELD].nunique()
-        all_items = df[ITEM_ID_FIELD].unique()
+        all_items = pd.concat([df, seen_df])[ITEM_ID_FIELD].unique()
+        n_items = len(all_items)
 
         result_dfs = []
         np.random.seed(seed)
         for user_id, user_df in df.groupby(USER_ID_FIELD):
             user_items = user_df[ITEM_ID_FIELD].unique()
+            seen_items = seen_df.loc[seen_df[USER_ID_FIELD] == user_id, ITEM_ID_FIELD].unique()
 
             num_existing = len(user_df)
-            if num_existing >= K:
+            if K > 0 and num_existing >= K:
                 sampled_df = user_df.sample(n=K, random_state=seed)
             else:
-                num_to_sample = K - num_existing
-                unseen_items = np.setdiff1d(all_items, user_items)
-
-                # NOTE: Sample unseen items
-                sampled_items = np.random.choice(unseen_items, size=num_to_sample, replace=False)
+                unseen_items = np.setdiff1d(all_items, np.union1d(user_items, seen_items))
+                if K == -1:
+                    # NOTE: If K is -1, sample all unseen items
+                    sampled_items = unseen_items
+                else:
+                    # NOTE: Sample unseen items
+                    num_to_sample = min(K - num_existing, len(unseen_items))
+                    sampled_items = np.random.choice(unseen_items, size=num_to_sample, replace=False)
 
                 # NOTE: Create negative samples with dummy values
                 negative_df = pd.DataFrame(
