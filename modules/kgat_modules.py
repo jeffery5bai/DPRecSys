@@ -1,9 +1,9 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from common.init import kaiming_uniform_initialization, xavier_uniform_initialization
+from common.init import xavier_uniform_initialization
 from torch_geometric.nn import HeteroConv, MessagePassing
-from torch_geometric.utils import dropout_adj, dropout_node, softmax
+from torch_geometric.utils import dropout_node, softmax
 
 
 class KGAT(nn.Module):
@@ -49,10 +49,9 @@ class KGAT(nn.Module):
             }
         )
 
+        xavier_uniform_initialization(self.embeddings)
         xavier_uniform_initialization(self.r_embs)  # NOTE: must initialize relation embeddings (nn.Parameter)
-        # TODO: this initialization is not used in the original KGAT paper, but it can be useful (but not in my experiments)
-        # xavier_uniform_initialization(self.embeddings)
-        # xavier_uniform_initialization(self.trans_m)
+        xavier_uniform_initialization(self.trans_m)
 
         self.rel_params = RelationParams(self.r_embs, self.trans_m)
 
@@ -73,13 +72,10 @@ class KGAT(nn.Module):
             nn.Linear(embed_dim * 2, embed_dim) if aggr == "graphsage" else nn.Linear(embed_dim, embed_dim)
         )
         self.linear_bi = nn.Linear(embed_dim, embed_dim) if aggr == "bi-interaction" else None
+        xavier_uniform_initialization(self.linear)
+        xavier_uniform_initialization(self.linear_bi) if self.linear_bi is not None else None
+
         self.leaky_relu = nn.LeakyReLU(negative_slope=0.2)
-
-        # TODO: this initialization is not used in the original KGAT paper, but it can be useful (but not in my experiments)
-        # kaiming_uniform_initialization(self.linear, nonlinearity="leaky_relu", a=0.2)
-        # if self.linear_bi is not None:
-        #     kaiming_uniform_initialization(self.linear_bi, nonlinearity="leaky_relu", a=0.2)
-
         self.dropout = nn.Dropout(mess_dropout)
 
     def forward(self, hetero_graph, training=False):

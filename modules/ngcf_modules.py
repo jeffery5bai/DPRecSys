@@ -1,5 +1,5 @@
 """
-NGCF (Neural Graph Collaborative Filtering) Module in PyTorch Geometric
+NGCF (Neural Graph Collaborative Filtering) Implementation with PyTorch Geometric.
 Wang, Xiang, et al. "Neural graph collaborative filtering."
 Proceedings of the 42nd international ACM SIGIR conference on Research and development in Information Retrieval. 2019.
 """
@@ -8,7 +8,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.nn import MessagePassing
-from torch_geometric.utils import dropout_adj, dropout_node
+from torch_geometric.utils import dropout_node
 
 
 class NGCF(nn.Module):
