@@ -248,6 +248,7 @@ class Evaluator:
         k: int = 100,
         actor_k: int = 5,
         rare_threshold: int = 5,
+        encoded: bool = True,
     ) -> pd.DataFrame:
         """
         Process the evaluation DataFrame to ensure it has the correct structure.
@@ -281,10 +282,11 @@ class Evaluator:
         )
 
         # NOTE: Encode features
-        encoded_df = feature_engineer.transform(exploded)
-        print("encoded", encoded_df[USER_ID_FIELD].nunique())
+        if encoded:
+            exploded = feature_engineer.transform(exploded)
+            print("encoded", exploded[USER_ID_FIELD].nunique())
 
-        return encoded_df
+        return exploded
 
     def evaluate_dpms_at_k(
         self,
@@ -302,26 +304,6 @@ class Evaluator:
         encoded_df = self.process_eval_df(
             eval_df, feature_engineer, k=k, actor_k=actor_k, rare_threshold=rare_threshold
         )
-        # # NOTE: Explode items and slice to top K
-        # df = eval_df.copy()
-        # df["topk_items"] = df["rec_items"].apply(lambda x: x[:k])
-        # exploded = df.explode("topk_items")
-        # exploded = exploded.rename(columns={"user": USER_ID_FIELD, "topk_items": ITEM_ID_FIELD})
-        # exploded = exploded[exploded[ITEM_ID_FIELD] != OOV_TOKEN]
-        # exploded[ITEM_ID_FIELD] = exploded[ITEM_ID_FIELD].astype(int)
-
-        # print("exploded", exploded[USER_ID_FIELD].nunique())
-        # # NOTE: Join item info
-        # exploded = DataPreprocessor().join_item_features(
-        #     exploded,
-        #     actor_k=actor_k,
-        #     threshold=rare_threshold,
-        # )
-
-        # # NOTE: Encode features
-        # encoded_df = feature_engineer.transform(exploded)
-
-        # print("encoded", encoded_df[USER_ID_FIELD].nunique())
 
         # NOTE: Calculate Prediction DP vectors for each user
         encoded_df["rating"] = 1.0  # Set a dummy rating for the purpose of DPS calculation
@@ -356,3 +338,56 @@ class Evaluator:
         combined_df["avg_dpms"] = combined_df[[f"{feat}_dpms" for feat in FEATURE_FIELD]].mean(axis=1)
 
         return combined_df[[USER_ID_FIELD] + [f"{feat}_dpms" for feat in FEATURE_FIELD] + ["avg_dpms"]]
+
+    def evaluate_ils_at_k(
+        self,
+        encoded_eval_df: pd.DataFrame,
+        k: int = 10,
+    ) -> pd.DataFrame:
+        """
+        Evaluate the intra-list similarity (ILS) at K.
+        Args:
+            eval_df: DataFrame with columns ["user", "rec_items", "gt_items"]. (item ids MUST BE encoded)
+            sim_matrix: Precomputed item-item similarity matrix.
+            k: Number of top items to consider for ILS calculation.
+        returns:
+            pd.DataFrame: DataFrame with columns ["user", f"ILS@{k}"].
+        """
+        # load files
+        data = np.load("../experiments/artifacts/item_sim_data.npz", allow_pickle=True)
+        sim_matrix = data["sim_matrix"]
+        movie2idx = data["movie2idx"].item()
+
+        encoded_eval_df[f"ILS@{k}"] = encoded_eval_df["rec_items"].apply(
+            lambda x: self._avg_pairwise_similarity(sim_matrix, x[:k], movie2idx)
+        )
+        return encoded_eval_df[["user", f"ILS@{k}"]]
+
+    def _avg_pairwise_similarity(
+        self, sim_matrix: np.ndarray, item_indices: np.ndarray, movie2idx: dict
+    ) -> float:
+        """
+        Compute average pairwise similarity among a set of items.
+
+        Parameters:
+            sim_matrix: 2D NumPy array of shape (n_items, n_items)
+            item_indices: 1D array of indices (integers)
+
+        Returns:
+            Average pairwise similarity (float)
+        """
+
+        # Map the raw movieID to valid indices in the sim_matrix
+        item_indices = [movie2idx[item] for item in item_indices if item in movie2idx]
+
+        if len(item_indices) < 2:
+            return 0.0  # or np.nan, since no pair exists
+
+        # Extract submatrix
+        submatrix = sim_matrix[np.ix_(item_indices, item_indices)]
+
+        # Exclude diagonal (self-similarity)
+        triu_indices = np.triu_indices(len(item_indices), k=1)
+        pairwise_sims = submatrix[triu_indices]
+
+        return pairwise_sims.mean()

@@ -4,10 +4,11 @@ import sys
 sys.path.append(os.path.abspath(os.path.join(os.getcwd(), "..")))
 
 import torch
-from modules.loss import BPRLoss, EmbLoss
-from modules.lightgcn_modules import LightGCN
-from pytorch_lightning import LightningModule
 from common.eval import Evaluator
+from modules.lightgcn_modules import LightGCN
+from modules.loss import BPRLoss, EmbLoss
+from pytorch_lightning import LightningModule
+
 
 class LightGCNRec(LightningModule):
     """
@@ -47,7 +48,7 @@ class LightGCNRec(LightningModule):
 
         self.evaluator = Evaluator()
 
-        self.ngcf_model = LightGCN(
+        self.lightgcn_model = LightGCN(
             num_users=self.num_users,
             num_items=self.num_items,
             edge_index=self.graph_data.edge_index,
@@ -65,7 +66,7 @@ class LightGCNRec(LightningModule):
         return (user_emb[user_idx] * item_emb[item_idx]).sum(dim=1)
 
     def training_step(self, batch, batch_idx):
-        user_emb, item_emb = self.ngcf_model()  # Compute embedding for training
+        user_emb, item_emb = self.lightgcn_model()  # Compute embedding for training
 
         user, pos_item, neg_item = batch["user"], batch["pos_item"], batch["neg_item"]
         yp_scores = self.forward(user_emb, item_emb, user, pos_item)
@@ -88,7 +89,7 @@ class LightGCNRec(LightningModule):
 
     # NOTE: Validation
     def on_validation_epoch_start(self):
-        self.user_emb, self.item_emb = self.ngcf_model()  # Compute embedding once for val phase
+        self.user_emb, self.item_emb = self.lightgcn_model()  # Compute embedding once for val phase
 
     def validation_step(self, batch, batch_idx):
         """We use user-item pairs for inference, so we need to compute scores for each pair."""
@@ -113,11 +114,9 @@ class LightGCNRec(LightningModule):
             "bpr_loss": all_bpr_loss.cpu(),
         }
 
-        # self.log_dict({"val_avg_bpr_loss": avg_bpr_loss}, prog_bar=True)
-
     # NOTE: Testing/Inference
     def on_test_epoch_start(self):
-        self.user_emb, self.item_emb = self.ngcf_model()
+        self.user_emb, self.item_emb = self.lightgcn_model()
 
     def test_step(self, batch, batch_idx):
         """We use user-item pairs for inference, so we need to compute scores for each pair."""
@@ -160,7 +159,6 @@ class LightGCNRec(LightningModule):
         }
         self.log_dict(metrics, prog_bar=True)
         self.test_results["eval_score_df"] = eval_score_df
-
 
     def configure_optimizers(self):
         return torch.optim.Adam(self.parameters(), lr=self.lr)

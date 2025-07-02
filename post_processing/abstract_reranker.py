@@ -38,17 +38,19 @@ class Reranker:
 
         self.evaluator = Evaluator()
 
-    def preprocess(self) -> pd.DataFrame:
+    def preprocess(self, encoded: bool = True) -> pd.DataFrame:
         """
         Preprocess the input DataFrame before reranking.
+        Args:
+            encoded (bool): Whether the DataFrame is already encoded. If True, it will skip encoding.
 
         Returns:
             pd.DataFrame: Preprocessed DataFrame ready for reranking.
         """
-        encoded_df = self.evaluator.process_eval_df(
-            eval_df=self.eval_df, feature_engineer=self.feature_engineer, k=self.m,
+        df = self.evaluator.process_eval_df(
+            eval_df=self.eval_df, feature_engineer=self.feature_engineer, k=self.m, encoded=encoded
         )
-        return encoded_df
+        return df
 
     def rerank(self) -> pd.DataFrame:
         raise NotImplementedError("Subclasses should implement this method.")

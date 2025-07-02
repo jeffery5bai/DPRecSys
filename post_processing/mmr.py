@@ -1,15 +1,13 @@
 """
 MMR (Maximal Marginal Relevance) Reranker.
-Cai-Nicolas, Z. (2005). Improving recommendation lists through topic diversification.
-In WWW'05: Proceedings of the 14th international conference on World Wide Web (pp. 22-32). ACM.
+Ziegler, Cai-Nicolas, et al. "Improving recommendation lists through topic diversification."
+Proceedings of the 14th international conference on World Wide Web. 2005.
 """
 
 import os
 import sys
 
 sys.path.append(os.path.abspath(os.path.join(os.getcwd(), "..")))
-
-from typing import Any, Dict, List
 
 import numpy as np
 import pandas as pd
@@ -27,22 +25,27 @@ class MMR(Reranker):
     def __init__(self, **kwargs):
         """ """
         super().__init__(**kwargs)
-        self.item_matrix: np.array = np.load("../experiments/artifacts/item_sim_matrix.npy")
+        # load files
+        data = np.load("../experiments/artifacts/item_sim_data.npz", allow_pickle=True)
+        self.item_matrix: np.array = data["sim_matrix"]
+        self.movie2idx: dict = data["movie2idx"].item()
+        self.idx2movie: dict = {v: k for k, v in self.movie2idx.items()}  # reverse mapping
 
-    def rerank(self, top_k: int = 20, theta: float = 0.5, random_state: int = 42) -> pd.DataFrame:
+    def rerank(self, top_k: int = 20, theta: float = 0.5) -> pd.DataFrame:
         """
         Rerank items for each user based on MMR algorithm.
         Args:
             top_k (int): Number of items to select for each user.
             theta (float): Trade-off parameter between relevance and diversity.
-            random_state (int): Random seed for reproducibility.
         Returns:
             pd.DataFrame: DataFrame containing reranked items for each user.
         """
 
-        # NOTE: this dataframe has been encoded and contains all necessary features
+        # NOTE: this dataframe contains all necessary features
         print("Preparing input DataFrame for MMR...")
-        df = self.preprocess()
+        df = self.preprocess(encoded=False)
+        # NOTE: map raw movieID to valid indices
+        df[self.item_id_field] = df[self.item_id_field].map(self.movie2idx)
 
         results = []
         print("Reranking items for each user...")
@@ -62,8 +65,7 @@ class MMR(Reranker):
                 )  # selected item with minimum weighted score
 
             # NOTE: decoding to get the original user, item IDs
-            user_id = self.feature_engineer.idx2vocab[self.user_id_field][user_id]
-            item_ids = [self.feature_engineer.idx2vocab[self.item_id_field][x] for x in selected_items]
+            item_ids = [self.idx2movie[x] for x in selected_items]
 
             results.append(
                 {

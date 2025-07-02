@@ -1,5 +1,5 @@
 """
-LightGCN module for PyTorch Geometric.
+LightGCN Implementation with PyTorch Geometric.
 He, Xiangnan, et al. "Lightgcn: Simplifying and powering graph convolution network for recommendation."
 Proceedings of the 43rd International ACM SIGIR conference on research and development in Information Retrieval. 2020.
 """
@@ -31,6 +31,7 @@ class LightGCN(nn.Module):
         self.convs = nn.ModuleList()
         for _ in range(num_layers):
             self.convs.append(LightGCNConv())
+            # self.convs.append(LGConv())
 
     def forward(self):
         x = torch.cat([self.user_embedding.weight, self.item_embedding.weight], dim=0)
