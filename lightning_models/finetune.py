@@ -6,8 +6,6 @@ sys.path.append(os.path.abspath(os.path.join(os.getcwd(), "..")))
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from pytorch_lightning import LightningModule
-
 from common.eval import Evaluator
 from modules.dpm_modules import DPMatcher
 from modules.dpr_modules import DPRegularizer
@@ -23,6 +21,7 @@ from modules.loss import (
     PersonalizedKLDivergenceLoss,
 )
 from modules.loss_weight_modules import EMALossNormalizer, LogScaleLoss
+from pytorch_lightning import LightningModule
 
 
 class FTDPRec(LightningModule):
@@ -173,10 +172,24 @@ class FTDPRec(LightningModule):
             mode="train",
         )
 
+        # NOTE: L2 regularization loss
+        l2_params = []
+        if self.mt_weights["dps_loss"] > 0:
+            l2_params.extend(self.dps_module.projection_fcs.values())
+        if self.mt_weights["dpr_loss"] > 0:
+            l2_params.extend(self.dpr_module.relation_fcs.values())
+
+        # Apply L2 regularization
+        l2_loss = (
+            self.l2_regularizer(*l2_params) if len(l2_params) > 0 else torch.tensor(0.0, device=self.device)
+        )
+        self.log_dict({"train_l2_loss": self.l2_reg_weight * l2_loss}, on_epoch=True, on_step=True)
+
         # TODO: weighing the main task and auxiliary task losses
         total_loss = 0
         for loss_name, loss in loss_dict.items():
-            total_loss += self.mt_weights[loss_name] * loss if loss_name in self.mt_weights else loss
+            total_loss += self.mt_weights[loss_name] * loss
+        total_loss += self.l2_reg_weight * l2_loss  # Add L2 regularization loss
         self.log_dict({"train_loss": total_loss}, on_epoch=True, on_step=True)
 
         # NOTE: Apply loss scaling
@@ -238,17 +251,10 @@ class FTDPRec(LightningModule):
             {f"{mode}_dpm_loss": self.mt_weights["dpm_loss"] * dpm_loss}, on_epoch=True, on_step=True
         )
 
-        # NOTE: L2 regularization loss
-        l2_loss = self.l2_regularizer(
-            *self.dps_module.projection_fcs.values(), *self.dpr_module.relation_fcs.values()
-        )
-        self.log_dict({f"{mode}_l2_loss": self.l2_reg_weight * l2_loss}, on_epoch=True, on_step=True)
-
         return {
             "dps_loss": dps_loss,
             "dpr_loss": dpr_loss,
             "dpm_loss": dpm_loss,
-            "l2_loss": self.l2_reg_weight * l2_loss,
         }
 
     # NOTE: Validation
@@ -347,7 +353,8 @@ class FTDPRec(LightningModule):
         total_loss = weighted_losses.sum()
 
         # Compute gradient norms for shared parameters (embedding model only)
-        shared_params = list(self.embedding_model.parameters())
+        shared_params = list(self.embedding_model.get_trainable_parameters())
+
         G = []
         for i in range(N):
             grad = torch.autograd.grad(

@@ -61,3 +61,6 @@ class EmbeddingWrapper(nn.Module):
     def unfreeze_pretrained(self):
         self.pretrained_user_emb.requires_grad_(True)
         self.pretrained_item_emb.requires_grad_(True)
+
+    def get_trainable_parameters(self):
+        return [p for p in self.parameters() if p.requires_grad]
