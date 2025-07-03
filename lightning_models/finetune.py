@@ -4,7 +4,10 @@ import sys
 sys.path.append(os.path.abspath(os.path.join(os.getcwd(), "..")))
 
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
+from pytorch_lightning import LightningModule
+
 from common.eval import Evaluator
 from modules.dpm_modules import DPMatcher
 from modules.dpr_modules import DPRegularizer
@@ -20,7 +23,6 @@ from modules.loss import (
     PersonalizedKLDivergenceLoss,
 )
 from modules.loss_weight_modules import EMALossNormalizer, LogScaleLoss
-from pytorch_lightning import LightningModule
 
 
 class FTDPRec(LightningModule):
@@ -38,7 +40,7 @@ class FTDPRec(LightningModule):
         strategy,  # whether to train the original embeddings
         lora_r=None,  # rank for LoRA, if applicable
         lr=1e-3,
-        reg_weight=1e-5,
+        l2_reg_weight=1e-3,
         rel_dim=16,
         dps_weights=None,
         dpr_weights=None,
@@ -51,7 +53,7 @@ class FTDPRec(LightningModule):
         self.save_hyperparameters()
 
         self.lr = lr
-        self.reg_weight = reg_weight
+        self.l2_reg_weight = l2_reg_weight
         self.rel_dim = rel_dim
 
         self.user_emb = None
@@ -69,24 +71,26 @@ class FTDPRec(LightningModule):
         self.lora_r = lora_r
         self.embedding_dim = self.embedding_model.pretrained_user_emb.size(1)
 
-        # # NOTE: [IMPORTANT] set this to manually optimize the model
-        # self.automatic_optimization = False
-        self.rescale_method = rescale_method
-
         self.mt_weights = (
             mt_weights
             if mt_weights is not None
             else {
-                "bpr_loss": 1.0,
                 "dps_loss": 1.0,
                 "dpr_loss": 1.0,
                 "dpm_loss": 1.0,
             }
         )
 
-        # NOTE: Main loss functions for recommendation
-        self.bpr_loss = BPRLoss(gamma=1e-10)
-        self.reg_loss = EmbLoss(norm=2)
+        # # NOTE: [IMPORTANT] set this to manually optimize the model
+        # self.automatic_optimization = False
+        self.rescale_method = rescale_method
+        # NOTE: Loss scaling module
+        self.l2_regularizer = L2Loss()
+        self.loss_scaling_module = LogScaleLoss()
+        self.ema_normalizer = EMALossNormalizer(static_weight=1.0, ema_decay=0.1)
+        if rescale_method == "gradnorm":
+            self.gradnorm_log_w = nn.Parameter(torch.ones(len(self.mt_weights)), requires_grad=True)
+            self.gradnorm_initialized_losses = None
 
         # NOTE: Auxiliary task 1 - Diversity Preference Scale (DPS)
         self.dps_module = DPSPredictor(emb_dim=self.embedding_dim, concat_emb=False)
@@ -103,11 +107,6 @@ class FTDPRec(LightningModule):
         self.dpm_loss_fn = KLDivergenceLoss(dpm_weights=dpm_weights)
         # self.dpm_loss_fn = PersonalizedKLDivergenceLoss(num_users=user_emb_tensor.size(0), use_temperature=True, init_temperature=0.5) # TODO: remove this in final version
         self.dpm_weights = self.dpm_loss_fn.dpm_weights
-
-        # NOTE: Loss scaling module
-        self.l2_regularizer = L2Loss()
-        self.loss_scaling_module = LogScaleLoss()
-        self.ema_normalizer = EMALossNormalizer(static_weight=1.0, ema_decay=0.1)
 
     def _get_first_occurrence_indices(self, tensor: torch.Tensor):
         """Get the first occurrence indices of unique values in a tensor."""
@@ -160,20 +159,6 @@ class FTDPRec(LightningModule):
         yp_scores = self.forward(user_emb, item_emb, user, pos_item)
         yn_scores = self.forward(user_emb, item_emb, user, neg_item)
 
-        # # NOTE: Main task - Recommendation
-        # pair_loss = self.bpr_loss(yp_scores, yn_scores)
-        # reg_loss = self.reg_loss(user_emb, item_emb[pos_item], item_emb[neg_item])
-        # bpr_loss = pair_loss + self.reg_weight * reg_loss
-        # self.log_dict(
-        #     {
-        #         "train_bpr_loss": self.mt_weights["bpr_loss"] * bpr_loss,
-        #         "train_pair_loss": pair_loss,
-        #         "train_reg_loss": self.reg_weight * reg_loss,
-        #     },
-        #     on_epoch=True,
-        #     on_step=True,
-        # )
-
         loss_dict = self.task_forward(
             user_emb,
             item_emb,
@@ -191,7 +176,7 @@ class FTDPRec(LightningModule):
         # TODO: weighing the main task and auxiliary task losses
         total_loss = 0
         for loss_name, loss in loss_dict.items():
-            total_loss += self.mt_weights[loss_name] * loss
+            total_loss += self.mt_weights[loss_name] * loss if loss_name in self.mt_weights else loss
         self.log_dict({"train_loss": total_loss}, on_epoch=True, on_step=True)
 
         # NOTE: Apply loss scaling
@@ -225,18 +210,6 @@ class FTDPRec(LightningModule):
         dpm_vec,
         mode="train",
     ):
-        # pair_loss = self.bpr_loss(yp_scores, yn_scores)
-        # reg_loss = self.reg_loss(self.user_emb, self.item_emb[pos_item], self.item_emb[neg_item])
-        # bpr_loss = pair_loss + self.reg_weight * reg_loss
-        # self.log_dict(
-        #     {
-        #         "val_bpr_loss": self.mt_weights["bpr_loss"] * bpr_loss,
-        #         "val_reg_loss": self.reg_weight * reg_loss,
-        #     },
-        #     on_epoch=True,
-        #     on_step=True,
-        # )
-
         # NOTE: Auxiliary task 1 - Diversity Preference Scale (DPS)
         unique_users, first_indices = self._get_first_occurrence_indices(user)
         unique_dps_label = {k: v[first_indices] for k, v in dps_label.items()}
@@ -269,14 +242,13 @@ class FTDPRec(LightningModule):
         l2_loss = self.l2_regularizer(
             *self.dps_module.projection_fcs.values(), *self.dpr_module.relation_fcs.values()
         )
-        self.log_dict({f"{mode}_l2_loss": self.mt_weights["l2_loss"] * l2_loss}, on_epoch=True, on_step=True)
+        self.log_dict({f"{mode}_l2_loss": self.l2_reg_weight * l2_loss}, on_epoch=True, on_step=True)
 
         return {
-            # "bpr_loss": bpr_loss,
             "dps_loss": dps_loss,
             "dpr_loss": dpr_loss,
             "dpm_loss": dpm_loss,
-            "l2_loss": l2_loss,
+            "l2_loss": self.l2_reg_weight * l2_loss,
         }
 
     # NOTE: Validation
@@ -297,52 +269,6 @@ class FTDPRec(LightningModule):
                 "labels": label,
             }
         )
-
-        # """We use user-item triplets for validation, so we need to compute scores for each triplet."""
-        # user, pos_item, neg_item = batch["user"], batch["pos_item"], batch["neg_item"]
-        # dps_label = {
-        #     "actor_dps": batch["actor_dps"],
-        #     "country_dps": batch["country_dps"],
-        #     "director_dps": batch["director_dps"],
-        #     "genre_dps": batch["genre_dps"],
-        # }
-        # dpm_label = {
-        #     "actor_pd": batch["actor_wvec"],
-        #     "country_pd": batch["country_wvec"],
-        #     "director_pd": batch["director_wvec"],
-        #     "genre_pd": batch["genre_wvec"],
-        # }
-        # dpm_vec = {
-        #     "actor_vec": batch["actor_vec"],
-        #     "country_vec": batch["country_vec"],
-        #     "director_vec": batch["director_vec"],
-        #     "genre_vec": batch["genre_vec"],
-        # }
-
-        # # NOTE: Main task: BPR (Pair-wise + L2 regularization loss)
-        # yp_scores = self.forward(self.user_emb, self.item_emb, user, pos_item)
-        # yn_scores = self.forward(self.user_emb, self.item_emb, user, neg_item)
-
-        # dps_loss, dpr_loss, dpm_loss = self.task_forward(
-        #     user,
-        #     pos_item,
-        #     neg_item,
-        #     yp_scores,
-        #     yn_scores,
-        #     dps_label,
-        #     dpm_label,
-        #     dpm_vec,
-        #     mode="val",
-        # )
-
-        # # TODO: weighing the main task and auxiliary task losses
-        # total_loss = (
-        #     # self.mt_weights["bpr_loss"] * bpr_loss
-        #     self.mt_weights["dps_loss"] * dps_loss
-        #     + self.mt_weights["dpr_loss"] * dpr_loss
-        #     + self.mt_weights["dpm_loss"] * dpm_loss
-        # )
-        # self.log_dict({"val_loss": total_loss}, on_epoch=True, on_step=True)
 
     def on_validation_epoch_end(self):
         # pass
@@ -384,6 +310,8 @@ class FTDPRec(LightningModule):
             rescaled_loss_dict = {
                 loss_name: self.loss_scaling_module(loss) for loss_name, loss in loss_dict.items()
             }
+        elif method == "gradnorm":
+            return self.gradnorm_step(loss_dict)
         else:
             raise NotImplementedError(f"Loss normalization method '{method}' is not implemented.")
 
@@ -403,6 +331,50 @@ class FTDPRec(LightningModule):
         self.log_dict({"normalized_train_loss": rescaled_total_loss}, on_epoch=True, on_step=True)
 
         return rescaled_total_loss, rescaled_loss_dict
+
+    def gradnorm_step(self, loss_dict):
+        """Implements GradNorm loss rescaling."""
+        task_names = list(self.mt_weights.keys())
+        task_losses = torch.stack([loss_dict[k] for k in task_names])
+        N = len(task_names)
+
+        if self.gradnorm_initialized_losses is None:
+            self.gradnorm_initialized_losses = task_losses.detach()
+
+        # Compute weighted loss
+        w = torch.exp(self.gradnorm_log_w)
+        weighted_losses = w * task_losses
+        total_loss = weighted_losses.sum()
+
+        # Compute gradient norms for shared parameters (embedding model only)
+        shared_params = list(self.embedding_model.parameters())
+        G = []
+        for i in range(N):
+            grad = torch.autograd.grad(
+                w[i] * task_losses[i], shared_params, retain_graph=True, create_graph=True
+            )
+            norm = torch.sqrt(sum(torch.sum(g**2) for g in grad))
+            G.append(norm)
+        G = torch.stack(G)
+        G_avg = G.mean()
+
+        # Compute inverse training rate
+        with torch.no_grad():
+            L_ratio = (task_losses / self.gradnorm_initialized_losses).detach()
+            r = L_ratio / L_ratio.mean()
+
+        alpha = 1.5  # GradNorm paper default
+        target_G = G_avg * r**alpha
+        gradnorm_loss = F.l1_loss(G, target_G)
+
+        # Log weights and gradnorm loss
+        for i, name in enumerate(task_names):
+            self.log(f"gradnorm_weight/{name}", w[i], prog_bar=True, on_step=True)
+        self.log("gradnorm_loss", gradnorm_loss, prog_bar=True, on_step=True)
+
+        return (total_loss + gradnorm_loss), {
+            name: w[i] * task_losses[i] for i, name in enumerate(task_names)
+        }
 
     def get_flat_grads(self, loss):
         self.zero_grad(set_to_none=True)  # Clear existing gradients.
@@ -424,7 +396,6 @@ class FTDPRec(LightningModule):
         This is useful to understand if the auxiliary tasks are conflicting with the main task.
         """
         # --- Gradient extraction ---
-        # g_main = self.get_flat_grads(loss_dict["bpr_loss"])
         g_dps = self.get_flat_grads(loss_dict["dps_loss"])
         g_dpr = self.get_flat_grads(loss_dict["dpr_loss"])
         g_dpm = self.get_flat_grads(loss_dict["dpm_loss"])
@@ -432,17 +403,11 @@ class FTDPRec(LightningModule):
         # --- Cosine similarities ---
         cos = F.cosine_similarity
 
-        # cos_main_dps = cos(g_main.unsqueeze(0), g_dps.unsqueeze(0)).item()
-        # cos_main_dpr = cos(g_main.unsqueeze(0), g_dpr.unsqueeze(0)).item()
-        # cos_main_dpm = cos(g_main.unsqueeze(0), g_dpm.unsqueeze(0)).item()
         cos_dps_dpr = cos(g_dps.unsqueeze(0), g_dpr.unsqueeze(0)).item()
         cos_dps_dpm = cos(g_dps.unsqueeze(0), g_dpm.unsqueeze(0)).item()
         cos_dpr_dpm = cos(g_dpr.unsqueeze(0), g_dpm.unsqueeze(0)).item()
 
         return {
-            # "cos_main_dps": cos_main_dps,
-            # "cos_main_dpr": cos_main_dpr,
-            # "cos_main_dpm": cos_main_dpm,
             "cos_dps_dpr": cos_dps_dpr,
             "cos_dps_dpm": cos_dps_dpm,
             "cos_dpr_dpm": cos_dpr_dpm,
@@ -496,4 +461,11 @@ class FTDPRec(LightningModule):
         self.test_results["eval_score_df"] = eval_score_df
 
     def configure_optimizers(self):
-        return torch.optim.Adam(self.parameters(), lr=self.lr)
+        params = list(self.parameters())
+        if self.rescale_method == "gradnorm":
+            other_params = [p for p in params if p is not self.gradnorm_log_w]
+            return torch.optim.Adam(
+                [{"params": other_params}, {"params": [self.gradnorm_log_w], "lr": self.lr}], lr=self.lr
+            )
+        else:
+            return torch.optim.Adam(params, lr=self.lr)
