@@ -39,7 +39,7 @@ class DPA_RS(Reranker):
         C_list: List[np.ndarray],
         d_list: List[np.ndarray],
         k: int,
-        epsilon: float = 1e-5,
+        epsilon: float = 1e-3,
         max_iter: int = 100,
         random_state: int = 42,
     ) -> np.ndarray:
